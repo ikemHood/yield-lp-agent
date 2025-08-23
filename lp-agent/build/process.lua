@@ -383,7 +383,6 @@ end
 -- Provide liquidity to permaswap pool (following permaswap-amm pattern)
 -- This simulates the deposit + AddLiquidity flow from permaswap-amm
 function mod.provideLiquidity(poolId, tokenA, amountA, tokenB, amountB)
-    local constants = require('src.libs.constants')
 
     -- Step 1: Deposit tokens to permaswap pool (like permaswap-amm deposit handler)
     -- This sends tokens with proper permaswap tags to trigger deposit into BalancesX/BalancesY
@@ -1014,7 +1013,7 @@ local json = require('json')
 
 -- Agent State
 Status = Status or enums.AgentStatus.ACTIVE
-Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.AUTO
+Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.PERMASWAP
 TokenOut = TokenOut or ao.env.Process.Tags["Token-Out"] or constants.GAME_PROCESS_ID
 Slippage = Slippage or tonumber(ao.env.Process.Tags["Slippage"]) or constants.DEFAULT_SLIPPAGE
 StartDate = StartDate or tonumber(ao.env.Process.Tags["Start-Date"]) or os.time()
@@ -1348,7 +1347,7 @@ Handlers.add("Health", "Health",
     function(msg)
         msg.reply({
             Action = "Health-Response",
-            Status = "Healthy",
+            -- Status = "Healthy",
             ["Agent-Version"] = AgentVersion,
             ["Current-Time"] = tostring(os.time()),
             ["Status"] = Status

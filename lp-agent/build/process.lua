@@ -1,8 +1,8 @@
 do
 local _ENV = _ENV
 package.preload[ "libs.assertions" ] = function( ... ) local arg = _G.arg;
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
 
 local mod = {}
 
@@ -93,137 +93,9 @@ end
 
 do
 local _ENV = _ENV
-package.preload[ "libs.bint" ] = function( ... ) local arg = _G.arg;
--- Fallback bint implementation for AO processes
--- This is a simplified version for basic arithmetic operations
-
-local bint = {}
-
--- Create a new bint instance
-function bint.new(value)
-    local self = {
-        value = tostring(value or 0)
-    }
-
-    -- Basic arithmetic operations
-    function self:add(other)
-        return bint.new(tostring(tonumber(self.value) + tonumber(other.value or other)))
-    end
-
-    function self:sub(other)
-        return bint.new(tostring(tonumber(self.value) - tonumber(other.value or other)))
-    end
-
-    function self:mul(other)
-        return bint.new(tostring(tonumber(self.value) * tonumber(other.value or other)))
-    end
-
-    function self:div(other)
-        return bint.new(tostring(math.floor(tonumber(self.value) / tonumber(other.value or other))))
-    end
-
-    function self:udiv(other)
-        return self:div(other)  -- Same as div for positive numbers
-    end
-
-    -- Comparison operations
-    function self:lt(other)
-        return tonumber(self.value) < tonumber(other.value or other)
-    end
-
-    function self:lte(other)
-        return tonumber(self.value) <= tonumber(other.value or other)
-    end
-
-    function self:gt(other)
-        return tonumber(self.value) > tonumber(other.value or other)
-    end
-
-    function self:gte(other)
-        return tonumber(self.value) >= tonumber(other.value or other)
-    end
-
-    function self:eq(other)
-        return tonumber(self.value) == tonumber(other.value or other)
-    end
-
-    function self:zero()
-        return bint.new(0)
-    end
-
-    function self:isbint(val)
-        return type(val) == "table" and val.value ~= nil
-    end
-
-    -- Convert to string
-    function self:__tostring()
-        return self.value
-    end
-
-    return self
-end
-
--- Module functions
-function bint.__add(a, b)
-    return a:add(b)
-end
-
-function bint.__sub(a, b)
-    return a:sub(b)
-end
-
-function bint.__mul(a, b)
-    return a:mul(b)
-end
-
-function bint.udiv(a, b)
-    return a:udiv(b)
-end
-
-function bint.__lt(a, b)
-    return a:lt(b)
-end
-
-function bint.__le(a, b)
-    return a:lte(b)
-end
-
-function bint.__gt(a, b)
-    return a:gt(b)
-end
-
-function bint.__ge(a, b)
-    return a:gte(b)
-end
-
-function bint.__eq(a, b)
-    return a:eq(b)
-end
-
-function bint.zero()
-    return bint.new(0)
-end
-
-function bint.isbint(val)
-    return type(val) == "table" and val.value ~= nil
-end
-
--- Create bint instance with specified bits
-setmetatable(bint, {
-    __call = function(_, bits)
-        return bint.new
-    end
-})
-
-return bint
-end
-end
-
-do
-local _ENV = _ENV
 package.preload[ "libs.botega" ] = function( ... ) local arg = _G.arg;
-local utils = require('src.utils.utils')
-local constants = require('src.libs.constants')
+local utils = require('utils.utils')
+local constants = require('libs.constants')
 
 local mod = {}
 
@@ -425,7 +297,7 @@ end
 do
 local _ENV = _ENV
 package.preload[ "libs.permaswap" ] = function( ... ) local arg = _G.arg;
-local utils = require('src.utils.utils')
+local utils = require('utils.utils')
 local json = require('json')
 
 local mod = {}
@@ -565,12 +437,12 @@ end
 do
 local _ENV = _ENV
 package.preload[ "libs.strategy" ] = function( ... ) local arg = _G.arg;
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
-local token = require('src.libs.token')
-local permaswap = require('src.libs.permaswap')
-local botega = require('src.libs.botega')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
+local token = require('libs.token')
+local permaswap = require('libs.permaswap')
+local botega = require('libs.botega')
 
 local mod = {}
 
@@ -926,8 +798,8 @@ end
 do
 local _ENV = _ENV
 package.preload[ "libs.token" ] = function( ... ) local arg = _G.arg;
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
 
 local mod = {}
 
@@ -991,7 +863,7 @@ end
 do
 local _ENV = _ENV
 package.preload[ "utils.utils" ] = function( ... ) local arg = _G.arg;
-local enums = require('src.libs.enums')
+local enums = require('libs.enums')
 local bint = require ".bint"(1024)
 
 local utils = {
@@ -1130,14 +1002,14 @@ end
 -- A modular agent that implements a 50% swap + 50% liquidity provision strategy
 
 -- Load modules
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
-local token = require('src.libs.token')
-local strategy = require('src.libs.strategy')
-local assertions = require('src.libs.assertions')
-local botega = require('src.libs.botega')
-local permaswap = require('src.libs.permaswap')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
+local token = require('libs.token')
+local strategy = require('libs.strategy')
+local assertions = require('libs.assertions')
+local botega = require('libs.botega')
+local permaswap = require('libs.permaswap')
 local json = require('json')
 
 -- Agent State
@@ -1297,15 +1169,34 @@ Handlers.add("Credit-Notice", "Credit-Notice",
             SwapInProgress = true
             ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
             strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
-        elseif tokenId ~= constants.GAME_PROCESS_ID then
-            -- Handle LP tokens from Botega pools
-            -- LP tokens are sent as Credit-Notice from the pool
-            print("Received LP tokens: " .. tostring(quantity) .. " from " .. tokenId)
+        elseif tokenId ~= TokenOut then
             -- Transfer LP tokens to owner so we can track them
             token.transferToSelf(tokenId, quantity)
         end
     end
 )
+
+-- Handlers.add("Debit-Notice", "Debit-Notice",
+--     function(msg)
+--         local tokenId = msg.From or msg.Tags["From-Process"]
+--         local quantity = msg.Tags.Quantity
+
+--         -- Handle strategy execution for AO tokens
+--         if tokenId == TokenOut and not utils.isZero(quantity) then
+--             if SwapInProgress then
+--                 print("Strategy execution already in progress, queuing request")
+--                 return
+--             end
+
+--             SwapInProgress = true
+--             ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
+--             strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
+--         elseif tokenId ~= TokenOut then
+--             -- Transfer LP tokens to owner so we can track them
+--             token.transferToSelf(tokenId, quantity)
+--         end
+--     end
+-- )
 
 -- Withdraw tokens
 Handlers.add("Withdraw", "Withdraw",

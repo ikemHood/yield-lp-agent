@@ -1,9 +1,9 @@
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
-local token = require('src.libs.token')
-local permaswap = require('src.libs.permaswap')
-local botega = require('src.libs.botega')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
+local token = require('libs.token')
+local permaswap = require('libs.permaswap')
+local botega = require('libs.botega')
 
 local mod = {}
 

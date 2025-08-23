@@ -1,5 +1,5 @@
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
 
 local mod = {}
 

@@ -1,5 +1,5 @@
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
 
 local mod = {}
 

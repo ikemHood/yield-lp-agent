@@ -1,4 +1,4 @@
-local utils = require('src.utils.utils')
+local utils = require('utils.utils')
 local json = require('json')
 
 local mod = {}

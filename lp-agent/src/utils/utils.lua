@@ -1,4 +1,4 @@
-local enums = require('src.libs.enums')
+local enums = require('libs.enums')
 local bint = require ".bint"(1024)
 
 local utils = {

@@ -2,14 +2,14 @@
 -- A modular agent that implements a 50% swap + 50% liquidity provision strategy
 
 -- Load modules
-local constants = require('src.libs.constants')
-local utils = require('src.utils.utils')
-local enums = require('src.libs.enums')
-local token = require('src.libs.token')
-local strategy = require('src.libs.strategy')
-local assertions = require('src.libs.assertions')
-local botega = require('src.libs.botega')
-local permaswap = require('src.libs.permaswap')
+local constants = require('libs.constants')
+local utils = require('utils.utils')
+local enums = require('libs.enums')
+local token = require('libs.token')
+local strategy = require('libs.strategy')
+local assertions = require('libs.assertions')
+local botega = require('libs.botega')
+local permaswap = require('libs.permaswap')
 local json = require('json')
 
 -- Agent State

@@ -1,0 +1,21 @@
+{
+  "name": "lp-agent",
+  "type": "module",
+  "scripts": {
+    "process:deploy": "cd ./lp-agent && ./scripts/deploy.sh",
+    "process:test": "cd ./lp-agent && ./scripts/test.sh",
+    "process:build": "cd ./lp-agent && ./scripts/build.sh"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "aoform": "latest",
+    "yaml": "^2.4.5"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "ao/*"
+  ]
+}

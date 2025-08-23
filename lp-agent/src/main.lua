@@ -169,15 +169,34 @@ Handlers.add("Credit-Notice", "Credit-Notice",
             SwapInProgress = true
             ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
             strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
-        elseif tokenId ~= constants.GAME_PROCESS_ID then
-            -- Handle LP tokens from Botega pools
-            -- LP tokens are sent as Credit-Notice from the pool
-            print("Received LP tokens: " .. tostring(quantity) .. " from " .. tokenId)
+        elseif tokenId ~= TokenOut then
             -- Transfer LP tokens to owner so we can track them
             token.transferToSelf(tokenId, quantity)
         end
     end
 )
+
+-- Handlers.add("Debit-Notice", "Debit-Notice",
+--     function(msg)
+--         local tokenId = msg.From or msg.Tags["From-Process"]
+--         local quantity = msg.Tags.Quantity
+
+--         -- Handle strategy execution for AO tokens
+--         if tokenId == TokenOut and not utils.isZero(quantity) then
+--             if SwapInProgress then
+--                 print("Strategy execution already in progress, queuing request")
+--                 return
+--             end
+
+--             SwapInProgress = true
+--             ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
+--             strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
+--         elseif tokenId ~= TokenOut then
+--             -- Transfer LP tokens to owner so we can track them
+--             token.transferToSelf(tokenId, quantity)
+--         end
+--     end
+-- )
 
 -- Withdraw tokens
 Handlers.add("Withdraw", "Withdraw",

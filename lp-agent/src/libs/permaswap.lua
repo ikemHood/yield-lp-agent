@@ -84,7 +84,6 @@ end
 -- Provide liquidity to permaswap pool (following permaswap-amm pattern)
 -- This simulates the deposit + AddLiquidity flow from permaswap-amm
 function mod.provideLiquidity(poolId, tokenA, amountA, tokenB, amountB)
-    local constants = require('src.libs.constants')
 
     -- Step 1: Deposit tokens to permaswap pool (like permaswap-amm deposit handler)
     -- This sends tokens with proper permaswap tags to trigger deposit into BalancesX/BalancesY

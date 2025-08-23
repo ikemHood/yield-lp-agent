@@ -13,4 +13,7 @@
       value: yield-lp-agent
     - name: Powered-By
       value: YAO TEAM & Ikem
-    -
+    - name: Dex
+      value: Permaswap
+    - name: Run-Indefinitely
+      value: true

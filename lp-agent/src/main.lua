@@ -14,7 +14,7 @@ local json = require('json')
 
 -- Agent State
 Status = Status or enums.AgentStatus.ACTIVE
-Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.AUTO
+Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.PERMASWAP
 TokenOut = TokenOut or ao.env.Process.Tags["Token-Out"] or constants.GAME_PROCESS_ID
 Slippage = Slippage or tonumber(ao.env.Process.Tags["Slippage"]) or constants.DEFAULT_SLIPPAGE
 StartDate = StartDate or tonumber(ao.env.Process.Tags["Start-Date"]) or os.time()
@@ -348,7 +348,7 @@ Handlers.add("Health", "Health",
     function(msg)
         msg.reply({
             Action = "Health-Response",
-            Status = "Healthy",
+            -- Status = "Healthy",
             ["Agent-Version"] = AgentVersion,
             ["Current-Time"] = tostring(os.time()),
             ["Status"] = Status

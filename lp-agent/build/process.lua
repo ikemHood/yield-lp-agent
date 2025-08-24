@@ -181,29 +181,6 @@ function mod.getPoolInfo(poolId)
     return poolInfo
 end
 
--- Provide liquidity with both tokens
--- Sends both tokens simultaneously with X-Action = "Provide"
--- Botega's AMM factory will handle the LP since both carry the Provide action
-function mod.provideLiquidity(poolId, tokenA, amountA, tokenB, amountB)
-    -- Send first token with Provide action
-    ao.send({
-        Target = tokenA,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = tostring(amountA),
-        ["X-Action"] = "Provide"
-    }).receive()
-
-    -- Send second token with Provide action
-    ao.send({
-        Target = tokenB,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = tostring(amountB),
-        ["X-Action"] = "Provide"
-    })
-end
-
 return mod
 end
 end
@@ -372,44 +349,6 @@ function mod.swap(result)
     return mod._awaitSwap(result.noteSettle)
 end
 
--- Provide liquidity to permaswap pool (following permaswap-amm pattern)
--- This simulates the deposit + AddLiquidity flow from permaswap-amm
-function mod.provideLiquidity(poolId, tokenA, amountA, tokenB, amountB)
-
-    -- Step 1: Deposit tokens to permaswap pool (like permaswap-amm deposit handler)
-    -- This sends tokens with proper permaswap tags to trigger deposit into BalancesX/BalancesY
-    ao.send({
-        Target = tokenA,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = amountA,
-        ["X-PS-For"] = "LP",  -- Indicate this is for LP, not swap
-        ["X-Amount-A"] = amountA,
-        ["X-Amount-B"] = amountB
-    }).receive()
-
-    ao.send({
-        Target = tokenB,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = amountB,
-        ["X-PS-For"] = "LP",  -- Indicate this is for LP, not swap
-        ["X-Amount-A"] = amountA,
-        ["X-Amount-B"] = amountB
-    }).receive()
-
-    -- Step 2: Call AddLiquidity action (like permaswap-amm AddLiquidity handler)
-    -- This is equivalent to calling AddLiquidity with MinLiquidity
-    local minLiquidity = "0"  -- Minimum LP tokens to mint (can be 0 for simplicity)
-    ao.send({
-        Target = poolId,
-        Action = "AddLiquidity",
-        MinLiquidity = minLiquidity,
-        ["X-Amount-A"] = amountA,
-        ["X-Amount-B"] = amountB
-    }).receive()
-end
-
 -- Alternative: Direct AddLiquidity call equivalent to permaswap-amm
 function mod.addLiquidityDirect(poolId, amountA, amountB, minLiquidity)
     ao.send({
@@ -432,15 +371,11 @@ package.preload[ "libs.strategy" ] = function( ... ) local arg = _G.arg;
 local constants = require('libs.constants')
 local utils = require('utils.utils')
 local enums = require('libs.enums')
-local token = require('libs.token')
 local permaswap = require('libs.permaswap')
 local botega = require('libs.botega')
 local json = require('json')
 
 local mod = {}
--- Legacy synchronous strategy functions removed:
--- executeSwapAndLP, executeSwap, executeSwapForLP, executeLP, executeLPWithBothTokens,
--- swapWithPermaswap, swapWithBotega, swapAuto, swapAutoForLP
 
 -- Choose DEX and pool for a given tokenOut and amount (used by staged LP flow)
 function mod.getBaseTokenId()
@@ -607,8 +542,6 @@ function mod.lpAddLiquidityPermaswap(poolId, amountA, amountB)
         ["X-Amount-B"] = tostring(amountB or "0")
     })
 end
-
--- Removed legacy success/error reporters
 
 -- Get strategy statistics
 function mod.getStrategyStats()

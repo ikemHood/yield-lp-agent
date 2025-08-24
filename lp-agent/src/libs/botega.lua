@@ -84,27 +84,4 @@ function mod.getPoolInfo(poolId)
     return poolInfo
 end
 
--- Provide liquidity with both tokens
--- Sends both tokens simultaneously with X-Action = "Provide"
--- Botega's AMM factory will handle the LP since both carry the Provide action
-function mod.provideLiquidity(poolId, tokenA, amountA, tokenB, amountB)
-    -- Send first token with Provide action
-    ao.send({
-        Target = tokenA,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = tostring(amountA),
-        ["X-Action"] = "Provide"
-    }).receive()
-
-    -- Send second token with Provide action
-    ao.send({
-        Target = tokenB,
-        Action = "Transfer",
-        Recipient = poolId,
-        Quantity = tostring(amountB),
-        ["X-Action"] = "Provide"
-    })
-end
-
 return mod

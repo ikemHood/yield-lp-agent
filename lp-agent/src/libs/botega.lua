@@ -46,11 +46,7 @@ function mod.getExpectedOutput(poolId, tokenIn, amountIn)
 
     local amountOut = (swapOutput and swapOutput.Output) or "0"
     local slippage = Slippage or 0.5
-    local adjustedSlippage = math.floor(slippage * 100)
-    local expectedMinOutput = utils.div(
-        utils.mul(amountOut, utils.subtract(10000, adjustedSlippage)),
-        10000
-    )
+    local expectedMinOutput = utils.calculateMinOutput(amountOut, slippage)
 
     return {
         amountOut = tostring(amountOut),

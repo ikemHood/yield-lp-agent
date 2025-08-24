@@ -21,19 +21,14 @@ function mod.getAOBalance()
     return mod.getBalance(constants.AO_PROCESS_ID)
 end
 
--- Transfer tokens to a recipient
-function mod.transferToRecipient(tokenId, quantity, recipient)
+-- Transfer tokens back to owner
+function mod.transferToSelf(tokenId, quantity)
     ao.send({
         Target = tokenId,
         Action = "Transfer",
-        Recipient = recipient,
+        Recipient = Owner,
         Quantity = quantity
     })
-end
-
--- Transfer tokens back to owner
-function mod.transferToSelf(tokenId, quantity)
-    mod.transferToRecipient(tokenId, quantity, Owner)
 end
 
 -- Transfer all remaining balances to owner
@@ -67,15 +62,6 @@ function mod.transferRemainingBalanceToSelf()
             mod.transferToSelf(tokenId, balance)
         end
     end
-end
-
--- Get balances for multiple tokens
-function mod.getMultipleBalances(tokenIds)
-    local balances = {}
-    for _, tokenId in ipairs(tokenIds) do
-        balances[tokenId] = mod.getBalance(tokenId)
-    end
-    return balances
 end
 
 return mod

@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 local constants = require('libs.constants')
 local utils = require('utils.utils')
 
@@ -9,7 +10,13 @@ function mod.getBalance(tokenId)
     return result.Tags.Balance or "0"
 end
 
--- Get AO token balance
+-- Get Base token balance (defaults to AO if BaseToken not set)
+function mod.getBaseBalance()
+    local base = BaseToken or constants.AO_PROCESS_ID
+    return mod.getBalance(base)
+end
+
+--  AO balance
 function mod.getAOBalance()
     return mod.getBalance(constants.AO_PROCESS_ID)
 end
@@ -44,13 +51,14 @@ function mod.transferRemainingBalanceToSelf()
 
     -- Always include AO
     addToken(constants.AO_PROCESS_ID)
+    -- Include BaseToken if different from AO
+    if BaseToken and BaseToken ~= constants.AO_PROCESS_ID then
+        addToken(BaseToken)
+    end
     -- Include configured TokenOut when set and not AO
     if TokenOut and TokenOut ~= constants.AO_PROCESS_ID then
         addToken(TokenOut)
     end
-    -- Optionally include well-known tokens if defined in constants
-    if constants.WAR_PROCESS_ID then addToken(constants.WAR_PROCESS_ID) end
-    if constants.WUSDC_PROCESS_ID then addToken(constants.WUSDC_PROCESS_ID) end
 
     -- Transfer any non-zero balances back to owner
     for _, tokenId in ipairs(toCheck) do

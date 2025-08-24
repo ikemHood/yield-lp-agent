@@ -216,23 +216,17 @@ package.preload[ "libs.constants" ] = function( ... ) local arg = _G.arg;
 local constants = {
     -- AO Ecosystem Token IDs
     AO_PROCESS_ID = "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc",
-    WAR_PROCESS_ID = "xU9zFkq3X2ZQ6olwNVvr1vUWIjc3kXTWr7xKQD6dh10",
-    WUSDC_PROCESS_ID = "7zH9dlMNoxprab9loshv3Y7WG45DOny_Vrq9KrXObdQ",
     GAME_PROCESS_ID = "s6jcB3ctSbiDNwR-paJgy5iOAhahXahLul8exSLHbGE",
 
     -- DEX Pool IDs
-    PERMASWAP_AO_WAR_POOL_ID = "FRF1k0BSv0gRzNA2n-95_Fpz9gADq9BGi5PyXKFp6r8",
-    PERMASWAP_AO_WUSDC_POOL_ID = "gjnaCsEd749ZXeG2H8akvf8wzbl7CQ4Ox-KYEBAdONk",
     PERMASWAP_AO_GAME_POOL_ID = "hbRwutwINSXCNxXxVNoNRT2YQk-OIX3Objqu85zJrLo",
-    BOTEGA_AO_WAR_POOL_ID = "B6qAwHi2OjZmyFCEU8hV6FZDSHbAOz8r0yy-fBbuTus",
-    BOTEGA_AO_WUSDC_POOL_ID = "TYqlQ2vqkF0H6nC0mCgGe6G12pqq9DsSXpvtHYc6_xY",
     BOTEGA_AO_GAME_POOL_ID = "rG-b4gQwhfjnbmYhrnvCMDPuXguqmAmYwHZf4y24WYs",
 
     -- DEX Factory IDs
     BOTEGA_AMM_FACTORY_ID = "3XBGLrygs11K63F_7mldWz4veNx6Llg6hI2yZs8LKHo",
 
     -- Fee Process ID
-    FEE_PROCESS_ID = "rkAezEIgacJZ_dVuZHOKJR8WKpSDqLGfgPJrs_Es7CA",
+    FEE_PROCESS_ID = "oOx8YhMyPkeV78LqGw2_BZSKSb4LzwdKEPo0_xwCdLk",
 
     -- Strategy Configuration
     SWAP_PERCENTAGE = 50,  -- 50% for swapping
@@ -241,19 +235,15 @@ local constants = {
     -- Default Configuration
     DEFAULT_SLIPPAGE = 0.5,
     DEFAULT_LP_SLIPPAGE = 1.0,  -- Higher slippage tolerance for LP
-    AGENT_VERSION = "1.0.0"
+    AGENT_VERSION = "0.1.0"
 }
 
 -- Pool ID mappings
 constants.PERMASWAP_POOL_IDS = {
-    [constants.WAR_PROCESS_ID] = constants.PERMASWAP_AO_WAR_POOL_ID,
-    [constants.WUSDC_PROCESS_ID] = constants.PERMASWAP_AO_WUSDC_POOL_ID,
     [constants.GAME_PROCESS_ID] = constants.PERMASWAP_AO_GAME_POOL_ID
 }
 
 constants.BOTEGA_POOL_IDS = {
-    [constants.WAR_PROCESS_ID] = constants.BOTEGA_AO_WAR_POOL_ID,
-    [constants.WUSDC_PROCESS_ID] = constants.BOTEGA_AO_WUSDC_POOL_ID,
     [constants.GAME_PROCESS_ID] = constants.BOTEGA_AO_GAME_POOL_ID
 }
 
@@ -287,6 +277,13 @@ local enums = {
     StrategyType = {
         SWAP_50_LP_50 = "Swap50LP50",
         CUSTOM = "Custom"
+    },
+
+    -- LP staged flow states
+    LPFlowState = {
+        AWAIT_TOKEN_OUT_CREDIT = "AwaitTokenOutCredit",
+        TOKEN_OUT_SENT = "TokenOutSent",
+        COMPLETED = "Completed"
     }
 }
 
@@ -436,12 +433,14 @@ end
 do
 local _ENV = _ENV
 package.preload[ "libs.strategy" ] = function( ... ) local arg = _G.arg;
+---@diagnostic disable: undefined-global
 local constants = require('libs.constants')
 local utils = require('utils.utils')
 local enums = require('libs.enums')
 local token = require('libs.token')
 local permaswap = require('libs.permaswap')
 local botega = require('libs.botega')
+local json = require('json')
 
 local mod = {}
 
@@ -581,9 +580,36 @@ function mod.executeLPWithBothTokens(msg, tokenA, amountA, tokenB, amountB, push
         end
 
     else
-        -- Auto mode - try both, prefer the one with better rates
-        -- For now, default to Botega since it's simpler
-        return mod.executeLPWithBothTokens(msg, tokenA, amountA, tokenB, amountB, pushedFor)
+        -- Auto mode: prefer Botega if a mapped pool exists; otherwise fall back to Permaswap
+        local botePool = constants.BOTEGA_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID]
+        if botePool then
+            local success = pcall(function()
+                botega.provideLiquidity(botePool, tokenA, amountA, tokenB, amountB)
+            end)
+            if success then
+                print("Botega LP initiated (AUTO): " .. tostring(amountA) .. " " .. tokenA ..
+                      " + " .. tostring(amountB) .. " " .. tokenB)
+                return true, "Botega LP initiated (AUTO)"
+            else
+                return false, "Failed to send tokens for Botega LP (AUTO)"
+            end
+        end
+
+        local permaPool = constants.PERMASWAP_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID]
+        if permaPool then
+            local success = pcall(function()
+                permaswap.provideLiquidity(permaPool, tokenA, amountA, tokenB, amountB)
+            end)
+            if success then
+                print("Permaswap LP initiated (AUTO): " .. tostring(amountA) .. " " .. tokenA ..
+                      " + " .. tostring(amountB) .. " " .. tokenB)
+                return true, "Permaswap LP initiated (AUTO)"
+            else
+                return false, "Failed to send tokens for Permaswap LP (AUTO)"
+            end
+        end
+
+        return false, "No pool available for LP in AUTO mode"
     end
 end
 
@@ -700,6 +726,164 @@ function mod.swapAutoForLP(msg, tokenIn, tokenOut, amount, pushedFor)
     return mod.swapAuto(msg, tokenIn, tokenOut, amount, pushedFor, true)
 end
 
+-- Choose DEX and pool for a given tokenOut and amount (used by staged LP flow)
+function mod.getBaseTokenId()
+    return BaseToken or constants.AO_PROCESS_ID
+end
+
+-- Validate that a pool contains the expected base and out tokens for the given dex
+function mod.validatePoolPair(dex, poolId, baseToken, outToken)
+    if not dex or not baseToken or not outToken then return false, "Missing params" end
+    if dex == enums.DexType.PERMASWAP then
+        local pid = poolId or constants.PERMASWAP_POOL_IDS[outToken]
+        if not pid then return false, "No Permaswap pool mapping for out token" end
+        local out1 = permaswap.getExpectedOutput(pid, baseToken, "1") or { amountOut = "0" }
+        local out2 = permaswap.getExpectedOutput(pid, outToken, "1") or { amountOut = "0" }
+        if utils.isZero(out1.amountOut) or utils.isZero(out2.amountOut) then
+            return false, "Tokens not supported by Permaswap pool"
+        end
+        return true
+    elseif dex == enums.DexType.BOTEGA then
+        local pid = poolId or constants.BOTEGA_POOL_IDS[outToken]
+        if not pid then return false, "No Botega pool mapping for out token" end
+        local out1 = botega.getExpectedOutput(pid, baseToken, "1") or { amountOut = "0" }
+        local out2 = botega.getExpectedOutput(pid, outToken, "1") or { amountOut = "0" }
+        if utils.isZero(out1.amountOut) or utils.isZero(out2.amountOut) then
+            return false, "Tokens not supported by Botega pool"
+        end
+        return true
+    else
+        -- AUTO: validate that at least one mapped pool supports both tokens
+        if poolId then
+            return false, "Cannot validate AUTO with explicit Pool-Id; specify Dex"
+        end
+        local permaPid = constants.PERMASWAP_POOL_IDS[outToken]
+        local botePid = constants.BOTEGA_POOL_IDS[outToken]
+        local permaOk = false
+        local boteOk = false
+        if permaPid then
+            local a = permaswap.getExpectedOutput(permaPid, baseToken, "1") or { amountOut = "0" }
+            local b = permaswap.getExpectedOutput(permaPid, outToken, "1") or { amountOut = "0" }
+            permaOk = (not utils.isZero(a.amountOut)) and (not utils.isZero(b.amountOut))
+        end
+        if botePid then
+            local a = botega.getExpectedOutput(botePid, baseToken, "1") or { amountOut = "0" }
+            local b = botega.getExpectedOutput(botePid, outToken, "1") or { amountOut = "0" }
+            boteOk = (not utils.isZero(a.amountOut)) and (not utils.isZero(b.amountOut))
+        end
+        if permaOk or boteOk then return true end
+        return false, "No valid pools found for AUTO mode"
+    end
+end
+
+function mod.chooseDexAndPool(tokenOutId, swapAmount)
+    local dex = Dex or enums.DexType.AUTO
+    local chosenDex = dex
+    local poolId = nil
+
+    if dex == enums.DexType.AUTO then
+        local permaPool = constants.PERMASWAP_POOL_IDS[tokenOutId]
+        local botePool = constants.BOTEGA_POOL_IDS[tokenOutId]
+        local permaOut = { amountOut = "0" }
+        local boteOut = { amountOut = "0" }
+        local base = mod.getBaseTokenId()
+        if permaPool then
+            permaOut = permaswap.getExpectedOutput(permaPool, base, swapAmount)
+        end
+        if botePool then
+            boteOut = botega.getExpectedOutput(botePool, base, swapAmount)
+        end
+        if utils.gt(permaOut.amountOut, boteOut.amountOut) then
+            chosenDex = enums.DexType.PERMASWAP
+        else
+            chosenDex = enums.DexType.BOTEGA
+        end
+    end
+
+    if dex == enums.DexType.PERMASWAP then
+        poolId = PoolIdOverride or constants.PERMASWAP_POOL_IDS[tokenOutId]
+    elseif dex == enums.DexType.BOTEGA then
+        poolId = PoolIdOverride or constants.BOTEGA_POOL_IDS[tokenOutId]
+    else
+        if chosenDex == enums.DexType.PERMASWAP then
+            poolId = constants.PERMASWAP_POOL_IDS[tokenOutId]
+        elseif chosenDex == enums.DexType.BOTEGA then
+            poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
+        end
+    end
+
+    return chosenDex, poolId
+end
+
+-- Fire-and-forget swap trigger; rely on later Credit-Notice for TokenOut
+function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
+    if utils.isZero(swapAmount) then return end
+    local base = mod.getBaseTokenId()
+    if dex == enums.DexType.PERMASWAP then
+        if not poolId then return end
+        local out = permaswap.getExpectedOutput(poolId, base, swapAmount)
+        local order = permaswap.requestOrder(poolId, base, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
+        if order and order.NoteID and order.NoteSettle then
+            ao.send({
+                Target = base,
+                Action = "Transfer",
+                Recipient = order.NoteSettle,
+                Quantity = tostring(swapAmount),
+                ["X-FFP-For"] = "Settle",
+                ["X-FFP-NoteIDs"] = json.encode({ order.NoteID })
+            })
+        end
+    elseif dex == enums.DexType.BOTEGA then
+        if not poolId then return end
+        local out = botega.getExpectedOutput(poolId, base, swapAmount)
+        ao.send({
+            Target = base,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(swapAmount),
+            ["X-Expected-Min-Output"] = tostring(out.expectedMinOutput),
+            ["X-Swap-Nonce"] = botega.getSwapNonce(),
+            ["X-Action"] = "Swap"
+        })
+    end
+end
+
+-- Send a token to pool appropriately for LP depending on dex
+function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
+    if not poolId or not tokenId or utils.isZero(quantity) then return end
+    if dex == enums.DexType.BOTEGA then
+        ao.send({
+            Target = tokenId,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(quantity),
+            ["X-Action"] = "Provide"
+        })
+    elseif dex == enums.DexType.PERMASWAP then
+        ao.send({
+            Target = tokenId,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(quantity),
+            ["X-PS-For"] = "LP",
+            ["X-Amount-A"] = tostring(amountA or "0"),
+            ["X-Amount-B"] = tostring(amountB or "0")
+        })
+    end
+end
+
+-- Add liquidity call for permaswap after deposits
+function mod.lpAddLiquidityPermaswap(poolId, amountA, amountB)
+    if not poolId then return end
+    ao.send({
+        Target = poolId,
+        Action = "AddLiquidity",
+        MinLiquidity = "0",
+        ["X-Amount-A"] = tostring(amountA or "0"),
+        ["X-Amount-B"] = tostring(amountB or "0")
+    })
+end
+
 -- Strategy success handler
 function mod.strategySuccess(msg, strategyInfo)
     -- Update global state
@@ -797,6 +981,7 @@ end
 do
 local _ENV = _ENV
 package.preload[ "libs.token" ] = function( ... ) local arg = _G.arg;
+---@diagnostic disable: undefined-global
 local constants = require('libs.constants')
 local utils = require('utils.utils')
 
@@ -808,7 +993,13 @@ function mod.getBalance(tokenId)
     return result.Tags.Balance or "0"
 end
 
--- Get AO token balance
+-- Get Base token balance (defaults to AO if BaseToken not set)
+function mod.getBaseBalance()
+    local base = BaseToken or constants.AO_PROCESS_ID
+    return mod.getBalance(base)
+end
+
+--  AO balance
 function mod.getAOBalance()
     return mod.getBalance(constants.AO_PROCESS_ID)
 end
@@ -830,19 +1021,34 @@ end
 
 -- Transfer all remaining balances to owner
 function mod.transferRemainingBalanceToSelf()
-    local aoBalance = mod.getAOBalance()
-    if not utils.isZero(aoBalance) then
-        mod.transferToSelf(constants.AO_PROCESS_ID, aoBalance)
+    -- Build a unique list of token IDs to return balances for
+    local toCheck = {}
+    local seen = {}
+
+    local function addToken(id)
+        if id and not seen[id] then
+            table.insert(toCheck, id)
+            seen[id] = true
+        end
     end
 
-    local warBalance = mod.getBalance(constants.WAR_PROCESS_ID)
-    if not utils.isZero(warBalance) then
-        mod.transferToSelf(constants.WAR_PROCESS_ID, warBalance)
+    -- Always include AO
+    addToken(constants.AO_PROCESS_ID)
+    -- Include BaseToken if different from AO
+    if BaseToken and BaseToken ~= constants.AO_PROCESS_ID then
+        addToken(BaseToken)
+    end
+    -- Include configured TokenOut when set and not AO
+    if TokenOut and TokenOut ~= constants.AO_PROCESS_ID then
+        addToken(TokenOut)
     end
 
-    local wusdcBalance = mod.getBalance(constants.WUSDC_PROCESS_ID)
-    if not utils.isZero(wusdcBalance) then
-        mod.transferToSelf(constants.WUSDC_PROCESS_ID, wusdcBalance)
+    -- Transfer any non-zero balances back to owner
+    for _, tokenId in ipairs(toCheck) do
+        local balance = mod.getBalance(tokenId)
+        if not utils.isZero(balance) then
+            mod.transferToSelf(tokenId, balance)
+        end
     end
 end
 
@@ -979,6 +1185,17 @@ function utils.hasReachedEndDate()
     return currentTime >= EndDate and currentTime >= processedOrSwapped
 end
 
+-- Check if the current time is within the configured active window
+function utils.isWithinActiveWindow(now)
+    local t = now or os.time()
+    -- If running indefinitely, only require start date reached
+    if RunIndefinitely then
+        return t >= StartDate
+    end
+    if not StartDate or not EndDate then return false end
+    return t >= StartDate and t <= EndDate
+end
+
 -- Split quantity into two parts based on percentage
 function utils.splitQuantity(quantity, percentage)
     local qty = bint(quantity)
@@ -997,8 +1214,10 @@ return utils
 end
 end
 
+---@diagnostic disable: undefined-global
 -- Yield LP Agent
 -- A modular agent that implements a 50% swap + 50% liquidity provision strategy
+-- Author: Ikem (x.com/ikempeter3) - YAO TEAM
 
 -- Load modules
 local constants = require('libs.constants')
@@ -1021,6 +1240,8 @@ EndDate = EndDate or tonumber(ao.env.Process.Tags["End-Date"]) or math.huge
 RunIndefinitely = RunIndefinitely or ao.env.Process.Tags["Run-Indefinitely"] == "true"
 ConversionPercentage = ConversionPercentage or tonumber(ao.env.Process.Tags["Conversion-Percentage"]) or 50
 StrategyType = StrategyType or ao.env.Process.Tags["Strategy-Type"] or enums.StrategyType.SWAP_50_LP_50
+BaseToken = BaseToken or ao.env.Process.Tags["Base-Token"] or constants.AO_PROCESS_ID
+PoolIdOverride = PoolIdOverride or ao.env.Process.Tags["Pool-Id"]
 
 -- Statistics
 TotalTransactions = TotalTransactions or 0
@@ -1038,6 +1259,45 @@ SwappedUpToDate = SwappedUpToDate or nil
 FeeProcessId = FeeProcessId or constants.FEE_PROCESS_ID
 AgentVersion = AgentVersion or ao.env.Process.Tags["Agent-Version"] or constants.AGENT_VERSION
 
+-- Staged LP flow state (Credit/Debit driven)
+LPFlowActive = LPFlowActive or false
+LPFlowState = LPFlowState or nil -- enums.LPFlowState
+LPFlowDex = LPFlowDex or nil     -- enums.DexType
+LPFlowTokenOutId = LPFlowTokenOutId or nil
+LPFlowPoolId = LPFlowPoolId or nil
+LPFlowAoAmount = LPFlowAoAmount or nil             -- string
+LPFlowTokenOutAmount = LPFlowTokenOutAmount or nil -- string
+LPFlowPending = LPFlowPending or false             -- when true, start a new flow after current completes
+
+-- Staged LP helpers moved to libs/strategy.lua to avoid duplication
+
+-- Local helper: initiate staged swap+LP flow given current AO balance
+local function initiateStagedFlow(msg, tokenOutId)
+    local totalAmount = token.getBaseBalance()
+    if utils.isZero(totalAmount) then
+        SwapInProgress = false
+        return false
+    end
+
+    local swapAmount, aoForLP = utils.splitQuantity(totalAmount, constants.SWAP_PERCENTAGE)
+    local chosenDex, poolId = strategy.chooseDexAndPool(tokenOutId, swapAmount)
+
+    -- Fire-and-forget swap; rely on TokenOut credit notice later
+    strategy.triggerSwapFireAndForget(chosenDex, poolId, tokenOutId, swapAmount)
+
+    -- Stage LP flow
+    LPFlowActive = true
+    LPFlowState = enums.LPFlowState.AWAIT_TOKEN_OUT_CREDIT
+    LPFlowDex = chosenDex
+    LPFlowTokenOutId = tokenOutId
+    LPFlowPoolId = poolId
+    LPFlowAoAmount = tostring(aoForLP)
+    LPFlowTokenOutAmount = nil
+
+    ProcessedUpToDate = tonumber(msg and msg.Tags and msg.Tags["X-Swap-Date-To"]) or os.time()
+    return true
+end
+
 -- Info handler
 Handlers.add("Info", "Info",
     function(msg)
@@ -1049,6 +1309,8 @@ Handlers.add("Info", "Info",
             ["End-Date"] = tostring(EndDate),
             Dex = Dex,
             ["Token-Out"] = TokenOut,
+            ["Base-Token"] = BaseToken or constants.AO_PROCESS_ID,
+            ["Pool-Id"] = PoolIdOverride or "",
             Slippage = tostring(Slippage),
             Status = Status,
             ["Run-Indefinitely"] = tostring(RunIndefinitely),
@@ -1077,10 +1339,9 @@ Handlers.add("Update-Agent", "Update-Agent",
         assertions.checkWalletForPermission(msg)
         assertions.isAgentActive()
 
-        -- Update DEX preference
-        if utils.isValidDex(msg.Tags.Dex) then
-            Dex = msg.Tags.Dex
-        end
+        -- Stage potential updates for Dex/TokenOut/BaseToken/PoolId for validation
+        local desiredDex = Dex
+        if utils.isValidDex(msg.Tags.Dex) then desiredDex = msg.Tags.Dex end
 
         -- Update slippage
         if utils.isValidSlippage(tonumber(msg.Tags.Slippage)) then
@@ -1093,10 +1354,9 @@ Handlers.add("Update-Agent", "Update-Agent",
             EndDate = tonumber(msg.Tags["End-Date"])
         end
 
-        -- Update token out
-        if utils.isAddress(msg.Tags["Token-Out"]) then
-            TokenOut = msg.Tags["Token-Out"]
-        end
+        -- Stage Token-Out
+        local desiredTokenOut = TokenOut
+        if utils.isAddress(msg.Tags["Token-Out"]) then desiredTokenOut = msg.Tags["Token-Out"] end
 
         -- Update run indefinitely
         if utils.isValidBoolean(msg.Tags["Run-Indefinitely"]) then
@@ -1111,6 +1371,28 @@ Handlers.add("Update-Agent", "Update-Agent",
         -- Update strategy type
         if utils.isValidStrategy(msg.Tags["Strategy-Type"]) then
             StrategyType = msg.Tags["Strategy-Type"]
+        end
+
+        -- Stage Base-Token and Pool-Id overrides
+        local desiredBase = BaseToken or constants.AO_PROCESS_ID
+        if utils.isAddress(msg.Tags["Base-Token"]) then desiredBase = msg.Tags["Base-Token"] end
+
+        local desiredPool = PoolIdOverride
+        if utils.isAddress(msg.Tags["Pool-Id"]) then desiredPool = msg.Tags["Pool-Id"] end
+
+        -- If any of Dex/TokenOut/Base-Token/Pool-Id provided, validate pair/pool
+        local needsValidation = (msg.Tags.Dex ~= nil) or (msg.Tags["Token-Out"] ~= nil) or (msg.Tags["Base-Token"] ~= nil) or (msg.Tags["Pool-Id"] ~= nil)
+        if needsValidation then
+            local ok, err = strategy.validatePoolPair(desiredDex, desiredPool, desiredBase or constants.AO_PROCESS_ID, desiredTokenOut)
+            if not ok then
+                msg.reply({ Action = "Update-Failed", Error = tostring(err or "Validation failed") })
+                return
+            end
+            -- Commit validated updates
+            Dex = desiredDex
+            TokenOut = desiredTokenOut
+            BaseToken = desiredBase
+            PoolIdOverride = desiredPool
         end
 
         -- Update status
@@ -1139,16 +1421,32 @@ Handlers.add("Execute-Strategy", "Execute-Strategy",
         assertions.checkWalletForPermission(msg, "Wallet does not have permission to execute strategy")
         assertions.isAgentActive()
 
-        if SwapInProgress then
+        if SwapInProgress or LPFlowActive then
+            -- Queue next run
+            LPFlowPending = true
+            msg.reply({ Action = "Strategy-Queued", Data = "Staged flow in progress; next run queued" })
+            return
+        end
+
+        local now = os.time()
+        if not utils.isWithinActiveWindow(now) then
+            -- Return any held tokens to owner and inform caller
+            token.transferRemainingBalanceToSelf()
             msg.reply({
-                Action = "Strategy-Busy",
-                Data = "Strategy execution already in progress"
+                Action = "Strategy-Skipped-Time-Window",
+                Data = "Strategy not executed: outside active time window",
+                ["Start-Date"] = tostring(StartDate),
+                ["End-Date"] = tostring(EndDate),
+                ["Run-Indefinitely"] = tostring(RunIndefinitely),
+                ["Current-Time"] = tostring(now)
             })
             return
         end
 
+        -- Trigger staged flow
         SwapInProgress = true
-        strategy.executeSwapAndLP(msg, msg.Id)
+        local tokenOutId = msg.Tags["Token-Out"] or TokenOut
+        initiateStagedFlow(msg, tokenOutId)
     end
 )
 
@@ -1158,44 +1456,85 @@ Handlers.add("Credit-Notice", "Credit-Notice",
         local tokenId = msg.From or msg.Tags["From-Process"]
         local quantity = msg.Tags.Quantity
 
-        -- Handle strategy execution for AO tokens
-        if tokenId == constants.AO_PROCESS_ID and not utils.isZero(quantity) then
-            if SwapInProgress then
-                print("Strategy execution already in progress, queuing request")
+        -- Base token credit: trigger swap only and stage LP
+        local base = BaseToken or constants.AO_PROCESS_ID
+        if tokenId == base and not utils.isZero(quantity) then
+            -- If outside active window, immediately return credited amount and notify
+            local now = os.time()
+            if not utils.isWithinActiveWindow(now) then
+                token.transferToSelf(base, quantity)
+                ao.send({
+                    Target = Owner,
+                    Action = "Strategy-Skipped-Time-Window",
+                    Data = "Base token credit received but outside active time window; returned funds to owner",
+                    Tags = {
+                        ["Start-Date"] = tostring(StartDate),
+                        ["End-Date"] = tostring(EndDate),
+                        ["Run-Indefinitely"] = tostring(RunIndefinitely),
+                        ["Current-Time"] = tostring(now),
+                        ["Returned-Token"] = tokenId,
+                        ["Returned-Quantity"] = tostring(quantity)
+                    }
+                })
+                return
+            end
+            if SwapInProgress or LPFlowActive then
+                -- Record pending so we auto-run after finishing current flow
+                if not LPFlowPending then LPFlowPending = true end
+                print("Staged flow in progress; marked pending for next run")
                 return
             end
 
             SwapInProgress = true
-            ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
-            strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
-        elseif tokenId ~= TokenOut then
-            -- Transfer LP tokens to owner so we can track them
-            token.transferToSelf(tokenId, quantity)
+            local tokenOutId = msg.Tags["Token-Out"] or TokenOut
+            initiateStagedFlow(msg, tokenOutId)
+
+            -- TokenOut credit: send TokenOut to pool first
+        elseif LPFlowActive and LPFlowState == enums.LPFlowState.AWAIT_TOKEN_OUT_CREDIT and tokenId == LPFlowTokenOutId and not utils.isZero(quantity) then
+            LPFlowTokenOutAmount = quantity
+            strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, LPFlowTokenOutId, quantity, LPFlowAoAmount, quantity)
+            LPFlowState = enums.LPFlowState.TOKEN_OUT_SENT
+        else
+            -- For other credits, transfer to self so we can track them
+            if tokenId ~= TokenOut then
+                token.transferToSelf(tokenId, quantity)
+            end
         end
     end
 )
 
--- Handlers.add("Debit-Notice", "Debit-Notice",
---     function(msg)
---         local tokenId = msg.From or msg.Tags["From-Process"]
---         local quantity = msg.Tags.Quantity
+Handlers.add("Debit-Notice", "Debit-Notice",
+    function(msg)
+        local tokenId = msg.From or msg.Tags["From-Process"]
+        -- local quantity = msg.Tags.Quantity -- not used for decision
 
---         -- Handle strategy execution for AO tokens
---         if tokenId == TokenOut and not utils.isZero(quantity) then
---             if SwapInProgress then
---                 print("Strategy execution already in progress, queuing request")
---                 return
---             end
+        -- When our TokenOut transfer is debited, send Base token and (for permaswap) call AddLiquidity
+        if LPFlowActive and LPFlowState == enums.LPFlowState.TOKEN_OUT_SENT and tokenId == LPFlowTokenOutId then
+            local base = BaseToken or constants.AO_PROCESS_ID
+            if LPFlowDex == enums.DexType.BOTEGA then
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount)
+            elseif LPFlowDex == enums.DexType.PERMASWAP then
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount,
+                    LPFlowAoAmount, LPFlowTokenOutAmount)
+                strategy.lpAddLiquidityPermaswap(LPFlowPoolId, LPFlowAoAmount, LPFlowTokenOutAmount)
+            end
 
---             SwapInProgress = true
---             ProcessedUpToDate = tonumber(msg.Tags["X-Swap-Date-To"]) or os.time()
---             strategy.executeSwapAndLP(msg, msg.Tags["Pushed-For"])
---         elseif tokenId ~= TokenOut then
---             -- Transfer LP tokens to owner so we can track them
---             token.transferToSelf(tokenId, quantity)
---         end
---     end
--- )
+            LPFlowState = enums.LPFlowState.COMPLETED
+            LPFlowActive = false
+            SwapInProgress = false
+
+            -- If a run is pending, and we're within window, immediately start a new staged flow
+            if LPFlowPending then
+                local now = os.time()
+                if utils.isWithinActiveWindow(now) then
+                    LPFlowPending = false
+                    SwapInProgress = true
+                    initiateStagedFlow(nil, TokenOut)
+                end
+            end
+        end
+    end
+)
 
 -- Withdraw tokens
 Handlers.add("Withdraw", "Withdraw",
@@ -1204,11 +1543,17 @@ Handlers.add("Withdraw", "Withdraw",
 
         local tokenId = msg.Tags["Token-Id"]
         local quantity = msg.Tags["Quantity"]
+        local all = msg.Tags["ALL"]
 
         assertions.isAddress("Token-Id", tokenId)
         assertions.isTokenQuantity("Quantity", quantity)
 
-        token.transferToSelf(tokenId, quantity)
+        if all == "true" then
+            local balance = token.getBalance(tokenId)
+            token.transferToSelf(tokenId, balance)
+        else
+            token.transferToSelf(tokenId, quantity)
+        end
 
         msg.reply({
             Action = "Withdraw-Success",
@@ -1222,16 +1567,13 @@ Handlers.add("Finalize-Agent", "Finalize-Agent",
     function(msg)
         assertions.checkWalletForPermission(msg, "Wallet does not have permission to finalize the agent")
 
-        SwapInProgress = true
-
-        -- Execute final strategy with remaining balance
-        local aoBalance = token.getAOBalance()
-        if not utils.isZero(aoBalance) then
-            strategy.executeSwapAndLP(msg, msg.Id)
-        end
-
         -- Transfer remaining balances
         token.transferRemainingBalanceToSelf()
+
+        -- End agent execution
+        EndDate = os.time()
+        RunIndefinitely = false
+        Status = enums.AgentStatus.COMPLETED
 
         msg.reply({
             Action = "Finalize-Success",
@@ -1258,35 +1600,6 @@ Handlers.add("Get-Stats", "Get-Stats",
                 ["Total-LP-Tokens"] = tostring(TotalLPTokens),
                 ["Total-Bought"] = json.encode(strategyStats.totalBought)
             }
-        })
-    end
-)
-
--- AddLiquidity handler - permaswap equivalent
-Handlers.add("AddLiquidity", "AddLiquidity",
-    function(msg)
-        -- Check which DEX to use
-        local dex = Dex or enums.DexType.AUTO
-        if dex == enums.DexType.PERMASWAP then
-            permaswap.addLiquidityDirect(
-                constants.PERMASWAP_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID],
-                msg.Tags.AmountA or "0",
-                msg.Tags.AmountB or "0",
-                msg.Tags.MinLiquidity or "0"
-            )
-        elseif dex == enums.DexType.BOTEGA then
-            botega.provideLiquidity(
-                constants.BOTEGA_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID],
-                constants.AO_PROCESS_ID,
-                msg.Tags.AmountA or "0",
-                constants.WAR_PROCESS_ID,
-                msg.Tags.AmountB or "0"
-            )
-        end
-
-        msg.reply({
-            Action = "AddLiquidity-Received",
-            Data = "AddLiquidity request processed"
         })
     end
 )
@@ -1359,6 +1672,8 @@ print("Yield LP Agent initialized with " .. StrategyType .. " strategy")
 print("Agent Version: " .. AgentVersion)
 print("Status: " .. Status)
 print("Token Out: " .. TokenOut)
+print("Base Token: " .. (BaseToken or constants.AO_PROCESS_ID))
 print("DEX: " .. Dex)
+print("Pool Id Override: " .. tostring(PoolIdOverride))
+print("owner: " .. Owner)
 print("Process ID: " .. ao.id)
-

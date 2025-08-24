@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 -- Yield LP Agent
 -- A modular agent that implements a 50% swap + 50% liquidity provision strategy
 -- Author: Ikem (x.com/ikempeter3) - YAO TEAM
@@ -23,6 +24,8 @@ EndDate = EndDate or tonumber(ao.env.Process.Tags["End-Date"]) or math.huge
 RunIndefinitely = RunIndefinitely or ao.env.Process.Tags["Run-Indefinitely"] == "true"
 ConversionPercentage = ConversionPercentage or tonumber(ao.env.Process.Tags["Conversion-Percentage"]) or 50
 StrategyType = StrategyType or ao.env.Process.Tags["Strategy-Type"] or enums.StrategyType.SWAP_50_LP_50
+BaseToken = BaseToken or ao.env.Process.Tags["Base-Token"] or constants.AO_PROCESS_ID
+PoolIdOverride = PoolIdOverride or ao.env.Process.Tags["Pool-Id"]
 
 -- Statistics
 TotalTransactions = TotalTransactions or 0
@@ -54,7 +57,7 @@ LPFlowPending = LPFlowPending or false             -- when true, start a new flo
 
 -- Local helper: initiate staged swap+LP flow given current AO balance
 local function initiateStagedFlow(msg, tokenOutId)
-    local totalAmount = token.getAOBalance()
+    local totalAmount = token.getBaseBalance()
     if utils.isZero(totalAmount) then
         SwapInProgress = false
         return false
@@ -90,6 +93,8 @@ Handlers.add("Info", "Info",
             ["End-Date"] = tostring(EndDate),
             Dex = Dex,
             ["Token-Out"] = TokenOut,
+            ["Base-Token"] = BaseToken or constants.AO_PROCESS_ID,
+            ["Pool-Id"] = PoolIdOverride or "",
             Slippage = tostring(Slippage),
             Status = Status,
             ["Run-Indefinitely"] = tostring(RunIndefinitely),
@@ -118,10 +123,9 @@ Handlers.add("Update-Agent", "Update-Agent",
         assertions.checkWalletForPermission(msg)
         assertions.isAgentActive()
 
-        -- Update DEX preference
-        if utils.isValidDex(msg.Tags.Dex) then
-            Dex = msg.Tags.Dex
-        end
+        -- Stage potential updates for Dex/TokenOut/BaseToken/PoolId for validation
+        local desiredDex = Dex
+        if utils.isValidDex(msg.Tags.Dex) then desiredDex = msg.Tags.Dex end
 
         -- Update slippage
         if utils.isValidSlippage(tonumber(msg.Tags.Slippage)) then
@@ -134,10 +138,9 @@ Handlers.add("Update-Agent", "Update-Agent",
             EndDate = tonumber(msg.Tags["End-Date"])
         end
 
-        -- Update token out
-        if utils.isAddress(msg.Tags["Token-Out"]) then
-            TokenOut = msg.Tags["Token-Out"]
-        end
+        -- Stage Token-Out
+        local desiredTokenOut = TokenOut
+        if utils.isAddress(msg.Tags["Token-Out"]) then desiredTokenOut = msg.Tags["Token-Out"] end
 
         -- Update run indefinitely
         if utils.isValidBoolean(msg.Tags["Run-Indefinitely"]) then
@@ -152,6 +155,28 @@ Handlers.add("Update-Agent", "Update-Agent",
         -- Update strategy type
         if utils.isValidStrategy(msg.Tags["Strategy-Type"]) then
             StrategyType = msg.Tags["Strategy-Type"]
+        end
+
+        -- Stage Base-Token and Pool-Id overrides
+        local desiredBase = BaseToken or constants.AO_PROCESS_ID
+        if utils.isAddress(msg.Tags["Base-Token"]) then desiredBase = msg.Tags["Base-Token"] end
+
+        local desiredPool = PoolIdOverride
+        if utils.isAddress(msg.Tags["Pool-Id"]) then desiredPool = msg.Tags["Pool-Id"] end
+
+        -- If any of Dex/TokenOut/Base-Token/Pool-Id provided, validate pair/pool
+        local needsValidation = (msg.Tags.Dex ~= nil) or (msg.Tags["Token-Out"] ~= nil) or (msg.Tags["Base-Token"] ~= nil) or (msg.Tags["Pool-Id"] ~= nil)
+        if needsValidation then
+            local ok, err = strategy.validatePoolPair(desiredDex, desiredPool, desiredBase or constants.AO_PROCESS_ID, desiredTokenOut)
+            if not ok then
+                msg.reply({ Action = "Update-Failed", Error = tostring(err or "Validation failed") })
+                return
+            end
+            -- Commit validated updates
+            Dex = desiredDex
+            TokenOut = desiredTokenOut
+            BaseToken = desiredBase
+            PoolIdOverride = desiredPool
         end
 
         -- Update status
@@ -215,16 +240,17 @@ Handlers.add("Credit-Notice", "Credit-Notice",
         local tokenId = msg.From or msg.Tags["From-Process"]
         local quantity = msg.Tags.Quantity
 
-        -- AO credit: trigger swap only and stage LP
-        if tokenId == constants.AO_PROCESS_ID and not utils.isZero(quantity) then
+        -- Base token credit: trigger swap only and stage LP
+        local base = BaseToken or constants.AO_PROCESS_ID
+        if tokenId == base and not utils.isZero(quantity) then
             -- If outside active window, immediately return credited amount and notify
             local now = os.time()
             if not utils.isWithinActiveWindow(now) then
-                token.transferToSelf(constants.AO_PROCESS_ID, quantity)
+                token.transferToSelf(base, quantity)
                 ao.send({
                     Target = Owner,
                     Action = "Strategy-Skipped-Time-Window",
-                    Data = "AO credit received but outside active time window; returned funds to owner",
+                    Data = "Base token credit received but outside active time window; returned funds to owner",
                     Tags = {
                         ["Start-Date"] = tostring(StartDate),
                         ["End-Date"] = tostring(EndDate),
@@ -266,12 +292,13 @@ Handlers.add("Debit-Notice", "Debit-Notice",
         local tokenId = msg.From or msg.Tags["From-Process"]
         -- local quantity = msg.Tags.Quantity -- not used for decision
 
-        -- When our TokenOut transfer is debited, send AO and (for permaswap) call AddLiquidity
+        -- When our TokenOut transfer is debited, send Base token and (for permaswap) call AddLiquidity
         if LPFlowActive and LPFlowState == enums.LPFlowState.TOKEN_OUT_SENT and tokenId == LPFlowTokenOutId then
+            local base = BaseToken or constants.AO_PROCESS_ID
             if LPFlowDex == enums.DexType.BOTEGA then
-                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, constants.AO_PROCESS_ID, LPFlowAoAmount)
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount)
             elseif LPFlowDex == enums.DexType.PERMASWAP then
-                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, constants.AO_PROCESS_ID, LPFlowAoAmount,
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount,
                     LPFlowAoAmount, LPFlowTokenOutAmount)
                 strategy.lpAddLiquidityPermaswap(LPFlowPoolId, LPFlowAoAmount, LPFlowTokenOutAmount)
             end
@@ -429,6 +456,8 @@ print("Yield LP Agent initialized with " .. StrategyType .. " strategy")
 print("Agent Version: " .. AgentVersion)
 print("Status: " .. Status)
 print("Token Out: " .. TokenOut)
+print("Base Token: " .. (BaseToken or constants.AO_PROCESS_ID))
 print("DEX: " .. Dex)
+print("Pool Id Override: " .. tostring(PoolIdOverride))
 print("owner: " .. Owner)
 print("Process ID: " .. ao.id)

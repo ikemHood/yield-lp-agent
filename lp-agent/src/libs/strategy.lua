@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 local constants = require('libs.constants')
 local utils = require('utils.utils')
 local enums = require('libs.enums')
@@ -144,9 +145,36 @@ function mod.executeLPWithBothTokens(msg, tokenA, amountA, tokenB, amountB, push
         end
 
     else
-        -- Auto mode - try both, prefer the one with better rates
-        -- For now, default to Botega since it's simpler
-        return mod.executeLPWithBothTokens(msg, tokenA, amountA, tokenB, amountB, pushedFor)
+        -- Auto mode: prefer Botega if a mapped pool exists; otherwise fall back to Permaswap
+        local botePool = constants.BOTEGA_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID]
+        if botePool then
+            local success = pcall(function()
+                botega.provideLiquidity(botePool, tokenA, amountA, tokenB, amountB)
+            end)
+            if success then
+                print("Botega LP initiated (AUTO): " .. tostring(amountA) .. " " .. tokenA ..
+                      " + " .. tostring(amountB) .. " " .. tokenB)
+                return true, "Botega LP initiated (AUTO)"
+            else
+                return false, "Failed to send tokens for Botega LP (AUTO)"
+            end
+        end
+
+        local permaPool = constants.PERMASWAP_POOL_IDS[TokenOut or constants.GAME_PROCESS_ID]
+        if permaPool then
+            local success = pcall(function()
+                permaswap.provideLiquidity(permaPool, tokenA, amountA, tokenB, amountB)
+            end)
+            if success then
+                print("Permaswap LP initiated (AUTO): " .. tostring(amountA) .. " " .. tokenA ..
+                      " + " .. tostring(amountB) .. " " .. tokenB)
+                return true, "Permaswap LP initiated (AUTO)"
+            else
+                return false, "Failed to send tokens for Permaswap LP (AUTO)"
+            end
+        end
+
+        return false, "No pool available for LP in AUTO mode"
     end
 end
 
@@ -264,6 +292,55 @@ function mod.swapAutoForLP(msg, tokenIn, tokenOut, amount, pushedFor)
 end
 
 -- Choose DEX and pool for a given tokenOut and amount (used by staged LP flow)
+function mod.getBaseTokenId()
+    return BaseToken or constants.AO_PROCESS_ID
+end
+
+-- Validate that a pool contains the expected base and out tokens for the given dex
+function mod.validatePoolPair(dex, poolId, baseToken, outToken)
+    if not dex or not baseToken or not outToken then return false, "Missing params" end
+    if dex == enums.DexType.PERMASWAP then
+        local pid = poolId or constants.PERMASWAP_POOL_IDS[outToken]
+        if not pid then return false, "No Permaswap pool mapping for out token" end
+        local out1 = permaswap.getExpectedOutput(pid, baseToken, "1") or { amountOut = "0" }
+        local out2 = permaswap.getExpectedOutput(pid, outToken, "1") or { amountOut = "0" }
+        if utils.isZero(out1.amountOut) or utils.isZero(out2.amountOut) then
+            return false, "Tokens not supported by Permaswap pool"
+        end
+        return true
+    elseif dex == enums.DexType.BOTEGA then
+        local pid = poolId or constants.BOTEGA_POOL_IDS[outToken]
+        if not pid then return false, "No Botega pool mapping for out token" end
+        local out1 = botega.getExpectedOutput(pid, baseToken, "1") or { amountOut = "0" }
+        local out2 = botega.getExpectedOutput(pid, outToken, "1") or { amountOut = "0" }
+        if utils.isZero(out1.amountOut) or utils.isZero(out2.amountOut) then
+            return false, "Tokens not supported by Botega pool"
+        end
+        return true
+    else
+        -- AUTO: validate that at least one mapped pool supports both tokens
+        if poolId then
+            return false, "Cannot validate AUTO with explicit Pool-Id; specify Dex"
+        end
+        local permaPid = constants.PERMASWAP_POOL_IDS[outToken]
+        local botePid = constants.BOTEGA_POOL_IDS[outToken]
+        local permaOk = false
+        local boteOk = false
+        if permaPid then
+            local a = permaswap.getExpectedOutput(permaPid, baseToken, "1") or { amountOut = "0" }
+            local b = permaswap.getExpectedOutput(permaPid, outToken, "1") or { amountOut = "0" }
+            permaOk = (not utils.isZero(a.amountOut)) and (not utils.isZero(b.amountOut))
+        end
+        if botePid then
+            local a = botega.getExpectedOutput(botePid, baseToken, "1") or { amountOut = "0" }
+            local b = botega.getExpectedOutput(botePid, outToken, "1") or { amountOut = "0" }
+            boteOk = (not utils.isZero(a.amountOut)) and (not utils.isZero(b.amountOut))
+        end
+        if permaOk or boteOk then return true end
+        return false, "No valid pools found for AUTO mode"
+    end
+end
+
 function mod.chooseDexAndPool(tokenOutId, swapAmount)
     local dex = Dex or enums.DexType.AUTO
     local chosenDex = dex
@@ -274,11 +351,12 @@ function mod.chooseDexAndPool(tokenOutId, swapAmount)
         local botePool = constants.BOTEGA_POOL_IDS[tokenOutId]
         local permaOut = { amountOut = "0" }
         local boteOut = { amountOut = "0" }
+        local base = mod.getBaseTokenId()
         if permaPool then
-            permaOut = permaswap.getExpectedOutput(permaPool, constants.AO_PROCESS_ID, swapAmount)
+            permaOut = permaswap.getExpectedOutput(permaPool, base, swapAmount)
         end
         if botePool then
-            boteOut = botega.getExpectedOutput(botePool, constants.AO_PROCESS_ID, swapAmount)
+            boteOut = botega.getExpectedOutput(botePool, base, swapAmount)
         end
         if utils.gt(permaOut.amountOut, boteOut.amountOut) then
             chosenDex = enums.DexType.PERMASWAP
@@ -287,10 +365,16 @@ function mod.chooseDexAndPool(tokenOutId, swapAmount)
         end
     end
 
-    if chosenDex == enums.DexType.PERMASWAP then
-        poolId = constants.PERMASWAP_POOL_IDS[tokenOutId]
-    elseif chosenDex == enums.DexType.BOTEGA then
-        poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
+    if dex == enums.DexType.PERMASWAP then
+        poolId = PoolIdOverride or constants.PERMASWAP_POOL_IDS[tokenOutId]
+    elseif dex == enums.DexType.BOTEGA then
+        poolId = PoolIdOverride or constants.BOTEGA_POOL_IDS[tokenOutId]
+    else
+        if chosenDex == enums.DexType.PERMASWAP then
+            poolId = constants.PERMASWAP_POOL_IDS[tokenOutId]
+        elseif chosenDex == enums.DexType.BOTEGA then
+            poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
+        end
     end
 
     return chosenDex, poolId
@@ -299,13 +383,14 @@ end
 -- Fire-and-forget swap trigger; rely on later Credit-Notice for TokenOut
 function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
     if utils.isZero(swapAmount) then return end
+    local base = mod.getBaseTokenId()
     if dex == enums.DexType.PERMASWAP then
         if not poolId then return end
-        local out = permaswap.getExpectedOutput(poolId, constants.AO_PROCESS_ID, swapAmount)
-        local order = permaswap.requestOrder(poolId, constants.AO_PROCESS_ID, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
+        local out = permaswap.getExpectedOutput(poolId, base, swapAmount)
+        local order = permaswap.requestOrder(poolId, base, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
         if order and order.NoteID and order.NoteSettle then
             ao.send({
-                Target = constants.AO_PROCESS_ID,
+                Target = base,
                 Action = "Transfer",
                 Recipient = order.NoteSettle,
                 Quantity = tostring(swapAmount),
@@ -315,9 +400,9 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
         end
     elseif dex == enums.DexType.BOTEGA then
         if not poolId then return end
-        local out = botega.getExpectedOutput(poolId, constants.AO_PROCESS_ID, swapAmount)
+        local out = botega.getExpectedOutput(poolId, base, swapAmount)
         ao.send({
-            Target = constants.AO_PROCESS_ID,
+            Target = base,
             Action = "Transfer",
             Recipient = poolId,
             Quantity = tostring(swapAmount),

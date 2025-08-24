@@ -20,7 +20,7 @@ local constants = {
     -- Default Configuration
     DEFAULT_SLIPPAGE = 0.5,
     DEFAULT_LP_SLIPPAGE = 1.0,  -- Higher slippage tolerance for LP
-    AGENT_VERSION = "0.1.0"
+    AGENT_VERSION = "0.1.3"
 }
 
 -- Pool ID mappings

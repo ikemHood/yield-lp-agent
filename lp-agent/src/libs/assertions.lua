@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 local utils = require('utils.utils')
 local enums = require('libs.enums')
 

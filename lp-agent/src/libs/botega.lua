@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 local utils = require('utils.utils')
 local constants = require('libs.constants')
 

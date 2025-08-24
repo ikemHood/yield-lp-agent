@@ -115,6 +115,17 @@ function utils.hasReachedEndDate()
     return currentTime >= EndDate and currentTime >= processedOrSwapped
 end
 
+-- Check if the current time is within the configured active window
+function utils.isWithinActiveWindow(now)
+    local t = now or os.time()
+    -- If running indefinitely, only require start date reached
+    if RunIndefinitely then
+        return t >= StartDate
+    end
+    if not StartDate or not EndDate then return false end
+    return t >= StartDate and t <= EndDate
+end
+
 -- Split quantity into two parts based on percentage
 function utils.splitQuantity(quantity, percentage)
     local qty = bint(quantity)

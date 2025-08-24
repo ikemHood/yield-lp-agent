@@ -4,6 +4,7 @@ local enums = require('libs.enums')
 local token = require('libs.token')
 local permaswap = require('libs.permaswap')
 local botega = require('libs.botega')
+local json = require('json')
 
 local mod = {}
 
@@ -260,6 +261,107 @@ end
 -- Auto swap mode for LP (keeps tokens for LP)
 function mod.swapAutoForLP(msg, tokenIn, tokenOut, amount, pushedFor)
     return mod.swapAuto(msg, tokenIn, tokenOut, amount, pushedFor, true)
+end
+
+-- Choose DEX and pool for a given tokenOut and amount (used by staged LP flow)
+function mod.chooseDexAndPool(tokenOutId, swapAmount)
+    local dex = Dex or enums.DexType.AUTO
+    local chosenDex = dex
+    local poolId = nil
+
+    if dex == enums.DexType.AUTO then
+        local permaPool = constants.PERMASWAP_POOL_IDS[tokenOutId]
+        local botePool = constants.BOTEGA_POOL_IDS[tokenOutId]
+        local permaOut = { amountOut = "0" }
+        local boteOut = { amountOut = "0" }
+        if permaPool then
+            permaOut = permaswap.getExpectedOutput(permaPool, constants.AO_PROCESS_ID, swapAmount)
+        end
+        if botePool then
+            boteOut = botega.getExpectedOutput(botePool, constants.AO_PROCESS_ID, swapAmount)
+        end
+        if utils.gt(permaOut.amountOut, boteOut.amountOut) then
+            chosenDex = enums.DexType.PERMASWAP
+        else
+            chosenDex = enums.DexType.BOTEGA
+        end
+    end
+
+    if chosenDex == enums.DexType.PERMASWAP then
+        poolId = constants.PERMASWAP_POOL_IDS[tokenOutId]
+    elseif chosenDex == enums.DexType.BOTEGA then
+        poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
+    end
+
+    return chosenDex, poolId
+end
+
+-- Fire-and-forget swap trigger; rely on later Credit-Notice for TokenOut
+function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
+    if utils.isZero(swapAmount) then return end
+    if dex == enums.DexType.PERMASWAP then
+        if not poolId then return end
+        local out = permaswap.getExpectedOutput(poolId, constants.AO_PROCESS_ID, swapAmount)
+        local order = permaswap.requestOrder(poolId, constants.AO_PROCESS_ID, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
+        if order and order.NoteID and order.NoteSettle then
+            ao.send({
+                Target = constants.AO_PROCESS_ID,
+                Action = "Transfer",
+                Recipient = order.NoteSettle,
+                Quantity = tostring(swapAmount),
+                ["X-FFP-For"] = "Settle",
+                ["X-FFP-NoteIDs"] = json.encode({ order.NoteID })
+            })
+        end
+    elseif dex == enums.DexType.BOTEGA then
+        if not poolId then return end
+        local out = botega.getExpectedOutput(poolId, constants.AO_PROCESS_ID, swapAmount)
+        ao.send({
+            Target = constants.AO_PROCESS_ID,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(swapAmount),
+            ["X-Expected-Min-Output"] = tostring(out.expectedMinOutput),
+            ["X-Swap-Nonce"] = botega.getSwapNonce(),
+            ["X-Action"] = "Swap"
+        })
+    end
+end
+
+-- Send a token to pool appropriately for LP depending on dex
+function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
+    if not poolId or not tokenId or utils.isZero(quantity) then return end
+    if dex == enums.DexType.BOTEGA then
+        ao.send({
+            Target = tokenId,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(quantity),
+            ["X-Action"] = "Provide"
+        })
+    elseif dex == enums.DexType.PERMASWAP then
+        ao.send({
+            Target = tokenId,
+            Action = "Transfer",
+            Recipient = poolId,
+            Quantity = tostring(quantity),
+            ["X-PS-For"] = "LP",
+            ["X-Amount-A"] = tostring(amountA or "0"),
+            ["X-Amount-B"] = tostring(amountB or "0")
+        })
+    end
+end
+
+-- Add liquidity call for permaswap after deposits
+function mod.lpAddLiquidityPermaswap(poolId, amountA, amountB)
+    if not poolId then return end
+    ao.send({
+        Target = poolId,
+        Action = "AddLiquidity",
+        MinLiquidity = "0",
+        ["X-Amount-A"] = tostring(amountA or "0"),
+        ["X-Amount-B"] = tostring(amountB or "0")
+    })
 end
 
 -- Strategy success handler

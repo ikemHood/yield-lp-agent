@@ -31,19 +31,33 @@ end
 
 -- Transfer all remaining balances to owner
 function mod.transferRemainingBalanceToSelf()
-    local aoBalance = mod.getAOBalance()
-    if not utils.isZero(aoBalance) then
-        mod.transferToSelf(constants.AO_PROCESS_ID, aoBalance)
+    -- Build a unique list of token IDs to return balances for
+    local toCheck = {}
+    local seen = {}
+
+    local function addToken(id)
+        if id and not seen[id] then
+            table.insert(toCheck, id)
+            seen[id] = true
+        end
     end
 
-    local warBalance = mod.getBalance(constants.WAR_PROCESS_ID)
-    if not utils.isZero(warBalance) then
-        mod.transferToSelf(constants.WAR_PROCESS_ID, warBalance)
+    -- Always include AO
+    addToken(constants.AO_PROCESS_ID)
+    -- Include configured TokenOut when set and not AO
+    if TokenOut and TokenOut ~= constants.AO_PROCESS_ID then
+        addToken(TokenOut)
     end
+    -- Optionally include well-known tokens if defined in constants
+    if constants.WAR_PROCESS_ID then addToken(constants.WAR_PROCESS_ID) end
+    if constants.WUSDC_PROCESS_ID then addToken(constants.WUSDC_PROCESS_ID) end
 
-    local wusdcBalance = mod.getBalance(constants.WUSDC_PROCESS_ID)
-    if not utils.isZero(wusdcBalance) then
-        mod.transferToSelf(constants.WUSDC_PROCESS_ID, wusdcBalance)
+    -- Transfer any non-zero balances back to owner
+    for _, tokenId in ipairs(toCheck) do
+        local balance = mod.getBalance(tokenId)
+        if not utils.isZero(balance) then
+            mod.transferToSelf(tokenId, balance)
+        end
     end
 end
 

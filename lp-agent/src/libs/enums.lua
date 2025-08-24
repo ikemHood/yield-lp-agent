@@ -21,6 +21,13 @@ local enums = {
     StrategyType = {
         SWAP_50_LP_50 = "Swap50LP50",
         CUSTOM = "Custom"
+    },
+
+    -- LP staged flow states
+    LPFlowState = {
+        AWAIT_TOKEN_OUT_CREDIT = "AwaitTokenOutCredit",
+        TOKEN_OUT_SENT = "TokenOutSent",
+        COMPLETED = "Completed"
     }
 }
 

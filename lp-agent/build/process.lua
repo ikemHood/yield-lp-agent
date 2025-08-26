@@ -462,6 +462,16 @@ function mod.chooseDexAndPool(tokenOutId, swapAmount)
             poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
         end
     end
+    -- Respect explicit PoolIdOverride even in AUTO mode after choosing a dex
+    if PoolIdOverride then
+        -- Try to infer dex from known mappings to avoid mismatches
+        if PoolIdOverride == constants.PERMASWAP_POOL_IDS[tokenOutId] then
+            chosenDex = enums.DexType.PERMASWAP
+        elseif PoolIdOverride == constants.BOTEGA_POOL_IDS[tokenOutId] then
+            chosenDex = enums.DexType.BOTEGA
+        end
+        poolId = PoolIdOverride
+    end
 
     return chosenDex, poolId
 end
@@ -476,7 +486,7 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
         -- Update stats using expected minimum output
         TotalSwaps = (TotalSwaps or 0) + 1
         local minOut = tostring(out.expectedMinOutput)
-        TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or 0, minOut)
+        TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or "0", minOut)
         local order = permaswap.requestOrder(poolId, base, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
         if order and order.NoteID and order.NoteSettle then
             ao.send({
@@ -587,7 +597,7 @@ local mod = {}
 -- Get balance for a token
 function mod.getBalance(tokenId)
     local result = ao.send({ Target = tokenId, Action = "Balance" }).receive()
-    return result.Tags.Balance
+    return result.Tags.Balance or "0"
 end
 
 -- Get Base token balance (defaults to AO if BaseToken not set)
@@ -860,7 +870,7 @@ local function initiateStagedFlow(msg, tokenOutId)
         return false
     end
 
-    local swapAmount, aoForLP = utils.splitQuantity(totalAmount, constants.SWAP_PERCENTAGE)
+    local swapAmount, aoForLP = utils.splitQuantity(totalAmount, ConversionPercentage or constants.SWAP_PERCENTAGE)
     local chosenDex, poolId = strategy.chooseDexAndPool(tokenOutId, swapAmount)
 
     -- Fire-and-forget swap; rely on TokenOut credit notice later
@@ -1042,7 +1052,7 @@ Handlers.add("Credit-Notice", "Credit-Notice",
         local tokenId = msg.From or msg.Tags["From-Process"]
         local quantity = msg.Tags.Quantity
         -- Base token credit: trigger swap only and stage LP
-        local base = BaseToken or constants.AO_PROCESS_ID
+        local base = strategy.getBaseTokenId()
         if tokenId == base and not utils.isZero(quantity) then
             -- Detect refunds from DEX/pools to avoid auto-restarting the flow
             local sender = msg.Tags.Sender
@@ -1152,7 +1162,7 @@ Handlers.add("Debit-Notice", "Debit-Notice",
                 end
             end
 
-            local base = BaseToken or constants.AO_PROCESS_ID
+            local base = strategy.getBaseTokenId()
             local amountA = LPFlowAoAmount
             local amountB = tokenOutAmt
 
@@ -1168,14 +1178,17 @@ Handlers.add("Debit-Notice", "Debit-Notice",
             SwapInProgress = false
 
             -- If a run is pending, and we're within window, immediately start a new staged flow
-            -- if LPFlowPending then
-            --     local now = os.time()
-            --     if utils.isWithinActiveWindow(now) then
-            --         LPFlowPending = false
-            --         SwapInProgress = true
-            --         initiateStagedFlow(nil, TokenOut)
-            --     end
-            -- end
+            if LPFlowPending then
+                local now = os.time()
+                if utils.isWithinActiveWindow(now) then
+                    LPFlowPending = false
+                    -- Only restart if base balance available
+                    if not utils.isZero(token.getBaseBalance()) then
+                        SwapInProgress = true
+                        initiateStagedFlow(nil, TokenOut)
+                    end
+                end
+            end
         end
     end
 )
@@ -1214,7 +1227,7 @@ Handlers.add("Force-Continue", "Force-Continue",
         end
         if LPFlowState == enums.LPFlowState.TOKEN_OUT_SENT then
             -- Send Base token now and finalize per dex rules
-            local base = BaseToken or constants.AO_PROCESS_ID
+            local base = strategy.getBaseTokenId()
             strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount, LPFlowAoAmount, LPFlowTokenOutAmount)
 
             if LPFlowDex == enums.DexType.PERMASWAP then
@@ -1226,11 +1239,13 @@ Handlers.add("Force-Continue", "Force-Continue",
             SwapInProgress = false
 
             -- Auto-start pending if requested and within window
-            -- if LPFlowPending and utils.isWithinActiveWindow(os.time()) then
-            --     LPFlowPending = false
-            --     SwapInProgress = true
-            --     initiateStagedFlow(nil, TokenOut)
-            -- end
+            if LPFlowPending and utils.isWithinActiveWindow(os.time()) then
+                LPFlowPending = false
+                if not utils.isZero(token.getBaseBalance()) then
+                    SwapInProgress = true
+                    initiateStagedFlow(nil, TokenOut)
+                end
+            end
 
             msg.reply({ Action = "Force-Continue-Advanced", State = tostring(LPFlowState) })
             return

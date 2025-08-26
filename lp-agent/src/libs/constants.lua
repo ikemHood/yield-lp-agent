@@ -18,7 +18,7 @@ local constants = {
     LP_PERCENTAGE = 50,    -- 50% for liquidity provision
 
     -- Default Configuration
-    DEFAULT_SLIPPAGE = 0.5,
+    DEFAULT_SLIPPAGE = 1.0,
     DEFAULT_LP_SLIPPAGE = 1.0,  -- Higher slippage tolerance for LP
     AGENT_VERSION = "0.1.3"
 }

@@ -1,11 +1,7 @@
 {
   "name": "lp-agent",
-  "type": "module",
-  "scripts": {
-    "process:deploy": "cd ./lp-agent && ./scripts/deploy.sh",
-    "process:test": "cd ./lp-agent && ./scripts/test.sh",
-    "process:build": "cd ./lp-agent && ./scripts/build.sh"
-  },
+  "version": "0.1.3",
+  "author": "Ikem (x.com/ikempeter3) - YAO TEAM",
   "devDependencies": {
     "@types/bun": "latest",
     "aoform": "latest",
@@ -14,7 +10,14 @@
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
-  "author": "Ikem (x.com/ikempeter3) - YAO TEAM",
-  "version": "0.1.3",
-  "license": "BSD-2-Clause"
+  "license": "BSD-2-Clause",
+  "scripts": {
+    "process:deploy": "cd ./lp-agent && ./scripts/deploy.sh",
+    "process:test": "cd ./lp-agent && ./scripts/test.sh",
+    "process:build": "cd ./lp-agent && ./scripts/build.sh"
+  },
+  "type": "module",
+  "dependencies": {
+    "@permaweb/aoconnect": "^0.0.90"
+  }
 }

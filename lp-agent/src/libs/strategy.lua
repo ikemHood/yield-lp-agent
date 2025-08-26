@@ -93,6 +93,16 @@ function mod.chooseDexAndPool(tokenOutId, swapAmount)
             poolId = constants.BOTEGA_POOL_IDS[tokenOutId]
         end
     end
+    -- Respect explicit PoolIdOverride even in AUTO mode after choosing a dex
+    if PoolIdOverride then
+        -- Try to infer dex from known mappings to avoid mismatches
+        if PoolIdOverride == constants.PERMASWAP_POOL_IDS[tokenOutId] then
+            chosenDex = enums.DexType.PERMASWAP
+        elseif PoolIdOverride == constants.BOTEGA_POOL_IDS[tokenOutId] then
+            chosenDex = enums.DexType.BOTEGA
+        end
+        poolId = PoolIdOverride
+    end
 
     return chosenDex, poolId
 end
@@ -106,7 +116,7 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
         local out = permaswap.getExpectedOutput(poolId, base, swapAmount)
         -- Update stats using expected minimum output
         TotalSwaps = (TotalSwaps or 0) + 1
-        local minOut = tostring(out.expectedMinOutput or "0")
+        local minOut = tostring(out.expectedMinOutput)
         TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or "0", minOut)
         local order = permaswap.requestOrder(poolId, base, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
         if order and order.NoteID and order.NoteSettle then
@@ -119,12 +129,14 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
                 ["X-FFP-NoteIDs"] = json.encode({ order.NoteID })
             })
         end
-    elseif dex == enums.DexType.BOTEGA then
+        return
+    end
+    if dex == enums.DexType.BOTEGA then
         if not poolId then return end
         local out = botega.getExpectedOutput(poolId, base, swapAmount)
         -- Update stats using expected minimum output
         TotalSwaps = (TotalSwaps or 0) + 1
-        local minOut = tostring(out.expectedMinOutput or "0")
+        local minOut = tostring(out.expectedMinOutput)
         TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or "0", minOut)
         ao.send({
             Target = base,
@@ -135,21 +147,32 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
             ["X-Swap-Nonce"] = botega.getSwapNonce(),
             ["X-Action"] = "Swap"
         })
+        return
     end
 end
 
 -- Send a token to pool appropriately for LP depending on dex
 function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
+    print("LP Send Token To Pool " .. dex .. " " .. poolId .. " " .. tokenId .. " " .. quantity .. " " .. amountA .. " " .. amountB)
     if not poolId or not tokenId or utils.isZero(quantity) then return end
     if dex == enums.DexType.BOTEGA then
-        ao.send({
+        print("LP Send Token To Pool Botega")
+        local sendMsg = {
             Target = tokenId,
             Action = "Transfer",
             Recipient = poolId,
             Quantity = tostring(quantity),
-            ["X-Action"] = "Provide"
-        })
-    elseif dex == enums.DexType.PERMASWAP then
+            ["X-Action"] = "Provide",
+        }
+        -- Include slippage tolerance only when providing the base token
+        if tokenId == mod.getBaseTokenId() then
+            sendMsg["X-Slippage-Tolerance"] = tostring(Slippage or 0.5)
+        end
+        ao.send(sendMsg)
+        return
+    end
+    if dex == enums.DexType.PERMASWAP then
+        print("LP Send Token To Pool Permaswap")
         ao.send({
             Target = tokenId,
             Action = "Transfer",
@@ -157,8 +180,9 @@ function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
             Quantity = tostring(quantity),
             ["X-PS-For"] = "LP",
             ["X-Amount-A"] = tostring(amountA or "0"),
-            ["X-Amount-B"] = tostring(amountB or "0")
+            ["X-Amount-B"] = tostring(amountB or "0"),
         })
+        return
     end
 end
 

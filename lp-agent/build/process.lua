@@ -208,7 +208,7 @@ local constants = {
     LP_PERCENTAGE = 50,    -- 50% for liquidity provision
 
     -- Default Configuration
-    DEFAULT_SLIPPAGE = 0.5,
+    DEFAULT_SLIPPAGE = 1.0,
     DEFAULT_LP_SLIPPAGE = 1.0,  -- Higher slippage tolerance for LP
     AGENT_VERSION = "0.1.3"
 }
@@ -475,8 +475,8 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
         local out = permaswap.getExpectedOutput(poolId, base, swapAmount)
         -- Update stats using expected minimum output
         TotalSwaps = (TotalSwaps or 0) + 1
-        local minOut = tostring(out.expectedMinOutput or "0")
-        TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or "0", minOut)
+        local minOut = tostring(out.expectedMinOutput)
+        TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or 0, minOut)
         local order = permaswap.requestOrder(poolId, base, tokenOutId, tostring(swapAmount), out.expectedMinOutput)
         if order and order.NoteID and order.NoteSettle then
             ao.send({
@@ -488,12 +488,14 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
                 ["X-FFP-NoteIDs"] = json.encode({ order.NoteID })
             })
         end
-    elseif dex == enums.DexType.BOTEGA then
+        return
+    end
+    if dex == enums.DexType.BOTEGA then
         if not poolId then return end
         local out = botega.getExpectedOutput(poolId, base, swapAmount)
         -- Update stats using expected minimum output
         TotalSwaps = (TotalSwaps or 0) + 1
-        local minOut = tostring(out.expectedMinOutput or "0")
+        local minOut = tostring(out.expectedMinOutput)
         TotalBought[tokenOutId] = utils.add(TotalBought[tokenOutId] or "0", minOut)
         ao.send({
             Target = base,
@@ -504,21 +506,32 @@ function mod.triggerSwapFireAndForget(dex, poolId, tokenOutId, swapAmount)
             ["X-Swap-Nonce"] = botega.getSwapNonce(),
             ["X-Action"] = "Swap"
         })
+        return
     end
 end
 
 -- Send a token to pool appropriately for LP depending on dex
 function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
+    print("LP Send Token To Pool " .. dex .. " " .. poolId .. " " .. tokenId .. " " .. quantity .. " " .. amountA .. " " .. amountB)
     if not poolId or not tokenId or utils.isZero(quantity) then return end
     if dex == enums.DexType.BOTEGA then
-        ao.send({
+        print("LP Send Token To Pool Botega")
+        local sendMsg = {
             Target = tokenId,
             Action = "Transfer",
             Recipient = poolId,
             Quantity = tostring(quantity),
-            ["X-Action"] = "Provide"
-        })
-    elseif dex == enums.DexType.PERMASWAP then
+            ["X-Action"] = "Provide",
+        }
+        -- Include slippage tolerance only when providing the base token
+        if tokenId == mod.getBaseTokenId() then
+            sendMsg["X-Slippage-Tolerance"] = tostring(Slippage or 0.5)
+        end
+        ao.send(sendMsg)
+        return
+    end
+    if dex == enums.DexType.PERMASWAP then
+        print("LP Send Token To Pool Permaswap")
         ao.send({
             Target = tokenId,
             Action = "Transfer",
@@ -526,8 +539,9 @@ function mod.lpSendTokenToPool(dex, poolId, tokenId, quantity, amountA, amountB)
             Quantity = tostring(quantity),
             ["X-PS-For"] = "LP",
             ["X-Amount-A"] = tostring(amountA or "0"),
-            ["X-Amount-B"] = tostring(amountB or "0")
+            ["X-Amount-B"] = tostring(amountB or "0"),
         })
+        return
     end
 end
 
@@ -573,7 +587,7 @@ local mod = {}
 -- Get balance for a token
 function mod.getBalance(tokenId)
     local result = ao.send({ Target = tokenId, Action = "Balance" }).receive()
-    return result.Tags.Balance or "0"
+    return result.Tags.Balance
 end
 
 -- Get Base token balance (defaults to AO if BaseToken not set)
@@ -795,13 +809,11 @@ local enums = require('libs.enums')
 local token = require('libs.token')
 local strategy = require('libs.strategy')
 local assertions = require('libs.assertions')
-local botega = require('libs.botega')
-local permaswap = require('libs.permaswap')
 local json = require('json')
 
 -- Agent State
 Status = Status or enums.AgentStatus.ACTIVE
-Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.PERMASWAP
+Dex = Dex or ao.env.Process.Tags["Dex"] or enums.DexType.BOTEGA
 TokenOut = TokenOut or ao.env.Process.Tags["Token-Out"] or constants.GAME_PROCESS_ID
 Slippage = Slippage or tonumber(ao.env.Process.Tags["Slippage"]) or constants.DEFAULT_SLIPPAGE
 StartDate = StartDate or tonumber(ao.env.Process.Tags["Start-Date"]) or os.time()
@@ -852,6 +864,7 @@ local function initiateStagedFlow(msg, tokenOutId)
     local chosenDex, poolId = strategy.chooseDexAndPool(tokenOutId, swapAmount)
 
     -- Fire-and-forget swap; rely on TokenOut credit notice later
+    print("triggerSwapFireAndForget: " .. chosenDex .. " " .. poolId .. " " .. tokenOutId .. " " .. swapAmount)
     strategy.triggerSwapFireAndForget(chosenDex, poolId, tokenOutId, swapAmount)
 
     -- Stage LP flow
@@ -897,7 +910,9 @@ Handlers.add("Info", "Info",
             ["Total-Bought"] = json.encode(strategyStats.totalBought),
             ["Swap-In-Progress"] = tostring(SwapInProgress),
             ["Processed-Up-To-Date"] = tostring(ProcessedUpToDate),
-            ["Swapped-Up-To-Date"] = tostring(SwappedUpToDate)
+            ["Swapped-Up-To-Date"] = tostring(SwappedUpToDate),
+            ["LP-Flow-Active"] = tostring(LPFlowActive),
+            ["LP-Flow-State"] = tostring(LPFlowState),
         })
     end
 )
@@ -950,9 +965,11 @@ Handlers.add("Update-Agent", "Update-Agent",
         if utils.isAddress(msg.Tags["Pool-Id"]) then desiredPool = msg.Tags["Pool-Id"] end
 
         -- If any of Dex/TokenOut/Base-Token/Pool-Id provided, validate pair/pool
-        local needsValidation = (msg.Tags.Dex ~= nil) or (msg.Tags["Token-Out"] ~= nil) or (msg.Tags["Base-Token"] ~= nil) or (msg.Tags["Pool-Id"] ~= nil)
+        local needsValidation = (msg.Tags.Dex ~= nil) or (msg.Tags["Token-Out"] ~= nil) or
+        (msg.Tags["Base-Token"] ~= nil) or (msg.Tags["Pool-Id"] ~= nil)
         if needsValidation then
-            local ok, err = strategy.validatePoolPair(desiredDex, desiredPool, desiredBase or constants.AO_PROCESS_ID, desiredTokenOut)
+            local ok, err = strategy.validatePoolPair(desiredDex, desiredPool, desiredBase or constants.AO_PROCESS_ID,
+                desiredTokenOut)
             if not ok then
                 msg.reply({ Action = "Update-Failed", Error = tostring(err or "Validation failed") })
                 return
@@ -1024,10 +1041,36 @@ Handlers.add("Credit-Notice", "Credit-Notice",
     function(msg)
         local tokenId = msg.From or msg.Tags["From-Process"]
         local quantity = msg.Tags.Quantity
-
         -- Base token credit: trigger swap only and stage LP
         local base = BaseToken or constants.AO_PROCESS_ID
         if tokenId == base and not utils.isZero(quantity) then
+            -- Detect refunds from DEX/pools to avoid auto-restarting the flow
+            local sender = msg.Tags.Sender
+            local knownPerma = constants.PERMASWAP_POOL_IDS[TokenOut]
+            local knownBote = constants.BOTEGA_POOL_IDS[TokenOut]
+            local isRefund = (msg.Tags["X-FFP-For"] == "Refund")
+                or (msg.Tags["X-Refunded-Order"] ~= nil)
+                or (sender and (sender == (LPFlowPoolId or "") or sender == (knownPerma or "") or sender == (knownBote or "")))
+
+            if isRefund then
+                -- Stop current flow to prevent retry loops
+                SwapInProgress = false
+                LPFlowActive = false
+                LPFlowState = nil
+                LPFlowPending = false
+                ao.send({
+                    Target = Owner,
+                    Action = "Refund-Detected",
+                    Data = "Refund received; halting auto-restart",
+                    Tags = {
+                        Sender = tostring(sender),
+                        Quantity = tostring(quantity),
+                        ["X-FFP-For"] = tostring(msg.Tags["X-FFP-For"]),
+                        ["X-Refunded-Order"] = tostring(msg.Tags["X-Refunded-Order"])
+                    }
+                })
+                return
+            end
             -- If outside active window, immediately return credited amount and notify
             local now = os.time()
             if not utils.isWithinActiveWindow(now) then
@@ -1047,6 +1090,7 @@ Handlers.add("Credit-Notice", "Credit-Notice",
                 })
                 return
             end
+
             if SwapInProgress or LPFlowActive then
                 -- Record pending so we auto-run after finishing current flow
                 if not LPFlowPending then LPFlowPending = true end
@@ -1055,19 +1099,38 @@ Handlers.add("Credit-Notice", "Credit-Notice",
             end
 
             SwapInProgress = true
-            local tokenOutId = msg.Tags["Token-Out"] or TokenOut
-            initiateStagedFlow(msg, tokenOutId)
+            initiateStagedFlow(msg, TokenOut)
+            return
+        end
 
-            -- TokenOut credit: send TokenOut to pool first
-        elseif LPFlowActive and LPFlowState == enums.LPFlowState.AWAIT_TOKEN_OUT_CREDIT and tokenId == LPFlowTokenOutId and not utils.isZero(quantity) then
-            LPFlowTokenOutAmount = quantity
-            strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, LPFlowTokenOutId, quantity, LPFlowAoAmount, quantity)
-            LPFlowState = enums.LPFlowState.TOKEN_OUT_SENT
-        else
-            -- For other credits, transfer to self so we can track them
-            if tokenId ~= TokenOut then
-                token.transferToSelf(tokenId, quantity)
+        -- TokenOut credit: when swap delivers TokenOut, push it to pool (persist amount; fallback to current balance if Quantity missing)
+        if LPFlowActive and LPFlowState == enums.LPFlowState.AWAIT_TOKEN_OUT_CREDIT and tokenId == LPFlowTokenOutId then
+            local resolvedQty = quantity
+            if (not resolvedQty or utils.isZero(resolvedQty)) and LPFlowTokenOutId then
+                local bal = token.getBalance(LPFlowTokenOutId)
+                if not utils.isZero(bal) then
+                    resolvedQty = bal
+                end
             end
+
+            if not resolvedQty or utils.isZero(resolvedQty) then
+                -- Nothing to do yet; keep waiting
+                return
+            end
+
+            ao.send({ Target = Owner, Action = "Swap-Completed", Data = "Swap completed: tokenOut=" .. tostring(LPFlowTokenOutId) .. ", qty=" .. tostring(resolvedQty) })
+            LPFlowTokenOutAmount = resolvedQty
+            print("lpSendTokenToPool: " .. tostring(LPFlowTokenOutId) .. " " .. tostring(resolvedQty) .. " " .. tostring(LPFlowAoAmount) .. " " .. tostring(resolvedQty))
+            strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, LPFlowTokenOutId, resolvedQty, LPFlowAoAmount, resolvedQty)
+            LPFlowState = enums.LPFlowState.TOKEN_OUT_SENT
+            return
+        end
+
+        -- Any other credits: sweep to owner for accounting (ignore TokenOut which we may await)
+        if tokenId ~= TokenOut then
+            print("transferToSelf (non-flow credit): " .. tostring(tokenId) .. " " .. tostring(quantity))
+            token.transferToSelf(tokenId, quantity)
+            return
         end
     end
 )
@@ -1075,17 +1138,29 @@ Handlers.add("Credit-Notice", "Credit-Notice",
 Handlers.add("Debit-Notice", "Debit-Notice",
     function(msg)
         local tokenId = msg.From or msg.Tags["From-Process"]
-        -- local quantity = msg.Tags.Quantity -- not used for decision
+        local quantity = msg.Tags.Quantity
 
-        -- When our TokenOut transfer is debited, send Base token and (for permaswap) call AddLiquidity
+        -- When our TokenOut transfer is debited, resolve amounts and send Base; for permaswap then AddLiquidity
         if LPFlowActive and LPFlowState == enums.LPFlowState.TOKEN_OUT_SENT and tokenId == LPFlowTokenOutId then
+            -- Ensure TokenOut amount is available (fallback to current balance)
+            local tokenOutAmt = LPFlowTokenOutAmount
+            if (not tokenOutAmt or utils.isZero(tokenOutAmt)) and LPFlowTokenOutId then
+                local bal = token.getBalance(LPFlowTokenOutId)
+                if not utils.isZero(bal) then
+                    tokenOutAmt = bal
+                    LPFlowTokenOutAmount = tokenOutAmt
+                end
+            end
+
             local base = BaseToken or constants.AO_PROCESS_ID
+            local amountA = LPFlowAoAmount
+            local amountB = tokenOutAmt
+
             if LPFlowDex == enums.DexType.BOTEGA then
-                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount)
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, amountA, amountA, amountB)
             elseif LPFlowDex == enums.DexType.PERMASWAP then
-                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount,
-                    LPFlowAoAmount, LPFlowTokenOutAmount)
-                strategy.lpAddLiquidityPermaswap(LPFlowPoolId, LPFlowAoAmount, LPFlowTokenOutAmount)
+                strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, amountA, amountA, amountB)
+                strategy.lpAddLiquidityPermaswap(LPFlowPoolId, amountA, amountB)
             end
 
             LPFlowState = enums.LPFlowState.COMPLETED
@@ -1093,15 +1168,87 @@ Handlers.add("Debit-Notice", "Debit-Notice",
             SwapInProgress = false
 
             -- If a run is pending, and we're within window, immediately start a new staged flow
-            if LPFlowPending then
-                local now = os.time()
-                if utils.isWithinActiveWindow(now) then
-                    LPFlowPending = false
-                    SwapInProgress = true
-                    initiateStagedFlow(nil, TokenOut)
-                end
-            end
+            -- if LPFlowPending then
+            --     local now = os.time()
+            --     if utils.isWithinActiveWindow(now) then
+            --         LPFlowPending = false
+            --         SwapInProgress = true
+            --         initiateStagedFlow(nil, TokenOut)
+            --     end
+            -- end
         end
+    end
+)
+
+-- Force-continue staged LP flow
+Handlers.add("Force-Continue", "Force-Continue",
+    function(msg)
+        assertions.checkWalletForPermission(msg, "Wallet does not have permission to force-continue")
+
+        -- If there is no active flow, try to start a new one if pending or balances available
+        if not LPFlowActive then
+            SwapInProgress = false
+            msg.reply({ Action = "Force-Continue-Started-New", Data = "No active flow and no available balance/window" })
+            return
+        end
+
+        -- There is an active flow: advance by current state
+        if LPFlowState == enums.LPFlowState.AWAIT_TOKEN_OUT_CREDIT then
+            -- If TokenOut was already credited (but notice missed), push it to the pool now
+            if not LPFlowTokenOutId then
+                msg.reply({ Action = "Force-Continue-Error", Error = "TokenOutId missing for active flow" })
+                return
+            end
+            local outBal = token.getBalance(LPFlowTokenOutId)
+            if utils.isZero(outBal) and (not LPFlowTokenOutAmount or utils.isZero(LPFlowTokenOutAmount)) then
+                msg.reply({ Action = "Force-Continue-Wait", Data = "TokenOut not credited yet" })
+                return
+            end
+
+            local qty = (LPFlowTokenOutAmount and not utils.isZero(LPFlowTokenOutAmount)) and LPFlowTokenOutAmount or outBal
+            LPFlowTokenOutAmount = qty
+            strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, LPFlowTokenOutId, qty, LPFlowAoAmount, qty)
+            LPFlowState = enums.LPFlowState.TOKEN_OUT_SENT
+            msg.reply({ Action = "Force-Continue-Advanced", State = tostring(LPFlowState) })
+            return
+        end
+        if LPFlowState == enums.LPFlowState.TOKEN_OUT_SENT then
+            -- Send Base token now and finalize per dex rules
+            local base = BaseToken or constants.AO_PROCESS_ID
+            strategy.lpSendTokenToPool(LPFlowDex, LPFlowPoolId, base, LPFlowAoAmount, LPFlowAoAmount, LPFlowTokenOutAmount)
+
+            if LPFlowDex == enums.DexType.PERMASWAP then
+                strategy.lpAddLiquidityPermaswap(LPFlowPoolId, LPFlowAoAmount, LPFlowTokenOutAmount)
+            end
+
+            LPFlowState = enums.LPFlowState.COMPLETED
+            LPFlowActive = false
+            SwapInProgress = false
+
+            -- Auto-start pending if requested and within window
+            -- if LPFlowPending and utils.isWithinActiveWindow(os.time()) then
+            --     LPFlowPending = false
+            --     SwapInProgress = true
+            --     initiateStagedFlow(nil, TokenOut)
+            -- end
+
+            msg.reply({ Action = "Force-Continue-Advanced", State = tostring(LPFlowState) })
+            return
+        end
+        if LPFlowState == enums.LPFlowState.COMPLETED then
+            -- Completed but still marked active? Clean up and optionally start pending
+            LPFlowActive = false
+            SwapInProgress = false
+            if LPFlowPending and utils.isWithinActiveWindow(os.time()) then
+                LPFlowPending = false
+                SwapInProgress = true
+                msg.reply({ Action = "Force-Continue-Restarted", State = tostring(LPFlowState) })
+            else
+                msg.reply({ Action = "Force-Continue-No-Op", Data = "Flow already completed" })
+            end
+            return
+        end
+        msg.reply({ Action = "Force-Continue-Error", Error = "Unknown LP flow state" })
     end
 )
 
@@ -1112,15 +1259,15 @@ Handlers.add("Withdraw", "Withdraw",
 
         local tokenId = msg.Tags["Token-Id"]
         local quantity = msg.Tags["Quantity"]
-        local all = msg.Tags["ALL"]
+        local all = msg.Tags["Transfer-All"]
 
         assertions.isAddress("Token-Id", tokenId)
-        assertions.isTokenQuantity("Quantity", quantity)
 
-        if all == "true" then
+        if all then
             local balance = token.getBalance(tokenId)
             token.transferToSelf(tokenId, balance)
         else
+            assertions.isTokenQuantity("Quantity", quantity)
             token.transferToSelf(tokenId, quantity)
         end
 
@@ -1220,6 +1367,23 @@ Handlers.add("Provide-Confirmation", "Provide-Confirmation",
             Action = "LP-Notification-Received",
             ["Provide-Id"] = provideId,
             ["Pool-Tokens"] = poolTokens
+        })
+    end
+)
+
+-- Provider error handler - handles LP provider errors (Botega/Permaswap)
+Handlers.add("Provide-Error", "Provide-Error",
+    function(msg)
+        -- Stop current staged LP flow to prevent loops after provider failures
+        LPFlowActive = false
+        SwapInProgress = false
+        LPFlowPending = false
+        LPFlowState = nil
+
+        msg.reply({
+            Action = "Provide-Error-Ack",
+            Error = tostring(msg.Tags and (msg.Tags.Error or msg.Data) or "Unknown provider error"),
+            PoolId = tostring((msg.Tags and msg.Tags.PoolId) or LPFlowPoolId or "")
         })
     end
 )

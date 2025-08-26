@@ -192,7 +192,7 @@ function mod.lpAddLiquidityPermaswap(poolId, amountA, amountB)
     ao.send({
         Target = poolId,
         Action = "AddLiquidity",
-        MinLiquidity = "0",
+        MinLiquidity = "1",
         ["X-Amount-A"] = tostring(amountA or "0"),
         ["X-Amount-B"] = tostring(amountB or "0")
     })

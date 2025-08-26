@@ -25,18 +25,18 @@ await message({
     The arweave TxID of the process, this will become the "target".
     This is the process the message is ultimately sent to.
   */
-  process: "drHuWPvnhCknt7ubyhv40Ad0fnb0adXodS5bXJfyays",
+  process: "vMXwNbX07qLFB6aLdU93LNBIZTDQeDK-mopXweTzkf4",
   
   // Tags that the process will use as input.
   tags: [
-    { name: "Action", value: "Debug-Send-TokenOut-To-Pool" },
+    // { name: "Action", value: "Debug-Add-Liquidity" },
     // { name: "Action", value: "Execute-Strategy" },
-    // { name: "Action", value: "Withdraw" },
+    { name: "Action", value: "Withdraw" },
     // { name: "Action", value: "Info" },
     // { name: "Token-Id", value: "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc" },
-    // { name: "Token-Id", value: "s6jcB3ctSbiDNwR-paJgy5iOAhahXahLul8exSLHbGE" },
+    { name: "Token-Id", value: "s6jcB3ctSbiDNwR-paJgy5iOAhahXahLul8exSLHbGE" },
     // { name: "Quantity", value: "1" },
-    // { name: "Transfer-All", value: "true" },
+    { name: "Transfer-All", value: "true" },
   ],
   // A signer function used to build the message "signature"
   signer: createDataItemSigner(wallet),
